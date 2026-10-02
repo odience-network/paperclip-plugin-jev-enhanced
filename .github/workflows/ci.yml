@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # `.paperclip-sdk/*.tgz` are vendored, checked-in copies of the live Paperclip
+    # SDK packages, so they never need to hit the registry. Other deps (zod,
+    # @typesafe-ai/sdk) still install from the registry here; "no network" in
+    # this plugin's design only covers the test/eval runtime, not `pnpm install`.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Smoke eval against recorded fixtures
+        run: pnpm eval --policy ping
