@@ -169,18 +169,37 @@ export async function completeDecision(db: LedgerDb, id: string, patch: Complete
   );
 }
 
-export async function getLatestDecision(db: LedgerDb, issueId: string): Promise<DecisionRow | null> {
+/** Hard ceiling on `listDecisionHistory`'s `limit`, independent of what a
+ * caller requests, so a single UI/API call can't force an unbounded scan. */
+const MAX_DECISION_HISTORY_LIMIT = 100;
+
+/**
+ * `companyId` is required (not inferred from `issueId`) and is always part of
+ * the `WHERE` clause: an `issueId` alone must never be enough to read another
+ * company's decision rows.
+ */
+export async function getLatestDecision(db: LedgerDb, companyId: string, issueId: string): Promise<DecisionRow | null> {
   const rows = await db.query<DecisionDbRow>(
-    `SELECT * FROM ${tableName(db, "jev_decisions")} WHERE issue_id = $1 ORDER BY created_at DESC LIMIT 1`,
-    [issueId],
+    `SELECT * FROM ${tableName(db, "jev_decisions")}
+     WHERE company_id = $1 AND issue_id = $2
+     ORDER BY created_at DESC LIMIT 1`,
+    [companyId, issueId],
   );
   return rows[0] ? fromDbRow(rows[0]) : null;
 }
 
-export async function listDecisionHistory(db: LedgerDb, issueId: string, limit = 20): Promise<DecisionRow[]> {
+export async function listDecisionHistory(
+  db: LedgerDb,
+  companyId: string,
+  issueId: string,
+  limit = 20,
+): Promise<DecisionRow[]> {
+  const boundedLimit = Math.max(1, Math.min(limit, MAX_DECISION_HISTORY_LIMIT));
   const rows = await db.query<DecisionDbRow>(
-    `SELECT * FROM ${tableName(db, "jev_decisions")} WHERE issue_id = $1 ORDER BY created_at DESC LIMIT $2`,
-    [issueId, limit],
+    `SELECT * FROM ${tableName(db, "jev_decisions")}
+     WHERE company_id = $1 AND issue_id = $2
+     ORDER BY created_at DESC LIMIT $3`,
+    [companyId, issueId, boundedLimit],
   );
   return rows.map(fromDbRow);
 }

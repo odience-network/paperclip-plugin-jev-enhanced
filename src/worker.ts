@@ -8,6 +8,7 @@ import {
   type PluginApiResponse,
   type EnvSecretRefBinding,
 } from "@paperclipai/plugin-sdk";
+import { AuthenticationError, PermissionDeniedError } from "@typesafe-ai/sdk";
 import { parseJevConfig, type JevConfig } from "./config.js";
 import { JevClient } from "./jev/client.js";
 import { createInMemoryJevCache } from "./jev/cache.js";
@@ -42,6 +43,18 @@ function buildClient(ctx: PluginContext, config: JevConfig): JevClient {
 
 async function loadConfig(ctx: PluginContext, companyId?: string): Promise<JevConfig> {
   return parseJevConfig(await ctx.config.get(companyId));
+}
+
+/** `params.companyId` is the host-authorized scope the RPC bridge injects
+ * alongside UI-supplied params (see `GetDataParams`); it is never something a
+ * caller can override from `params`, so it's the only safe source of tenant
+ * scope for a `ctx.data` handler. */
+function requireCompanyId(params: Record<string, unknown>): string {
+  const companyId = params.companyId;
+  if (typeof companyId !== "string" || companyId.length === 0) {
+    throw new Error("companyId is required");
+  }
+  return companyId;
 }
 
 const plugin = definePlugin({
@@ -93,14 +106,16 @@ const plugin = definePlugin({
     });
 
     ctx.data.register("decisions-latest", async (params) => {
+      const companyId = requireCompanyId(params);
       const issueId = String(params.issueId ?? "");
-      return getLatestDecision(ctx.db, issueId);
+      return getLatestDecision(ctx.db, companyId, issueId);
     });
 
     ctx.data.register("decisions-history", async (params) => {
+      const companyId = requireCompanyId(params);
       const issueId = String(params.issueId ?? "");
       const limit = typeof params.limit === "number" ? params.limit : undefined;
-      return listDecisionHistory(ctx.db, issueId, limit);
+      return listDecisionHistory(ctx.db, companyId, issueId, limit);
     });
 
     ctx.jobs.register("daily-budget-report", async (job) => {
@@ -186,7 +201,33 @@ const plugin = definePlugin({
         ],
       };
     }
-    return { ok: true };
+
+    const ctx = currentContext;
+    if (!ctx) {
+      return { ok: true, warnings: ["Plugin worker is not ready yet; could not test the connection."] };
+    }
+
+    try {
+      await buildClient(ctx, parsed).listModels();
+      return { ok: true };
+    } catch (error) {
+      if (error instanceof AuthenticationError || error instanceof PermissionDeniedError) {
+        return {
+          ok: false,
+          errors: [
+            `TypeSafe rejected the bound key (HTTP ${error.status}). Create a new key at console.typesafe.ai and ` +
+              "rebind apiKeyRef.",
+          ],
+        };
+      }
+      return {
+        ok: true,
+        warnings: [
+          `Could not verify the connection to TypeSafe: ${error instanceof Error ? error.name : "unknown error"}. ` +
+            "Config was accepted but Test Connection could not confirm the key works.",
+        ],
+      };
+    }
   },
 
   async onApiRequest(input: PluginApiRequestInput): Promise<PluginApiResponse> {
@@ -196,9 +237,9 @@ const plugin = definePlugin({
     }
     switch (input.routeKey) {
       case "decision-latest":
-        return { status: 200, body: await getLatestDecision(ctx.db, input.params.issueId) };
+        return { status: 200, body: await getLatestDecision(ctx.db, input.companyId, input.params.issueId) };
       case "decision-history":
-        return { status: 200, body: await listDecisionHistory(ctx.db, input.params.issueId) };
+        return { status: 200, body: await listDecisionHistory(ctx.db, input.companyId, input.params.issueId) };
       case "policy-aggregate":
         return {
           status: 200,

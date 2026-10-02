@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { LedgerDb } from "../src/ledger/db.js";
-import { beginDecision, completeDecision, getLatestDecision, getPolicyAggregate } from "../src/ledger/decisions.js";
+import {
+  beginDecision,
+  completeDecision,
+  getLatestDecision,
+  getPolicyAggregate,
+  listDecisionHistory,
+} from "../src/ledger/decisions.js";
 import { recordFeedback } from "../src/ledger/feedback.js";
 import { acquireLease, type LeaseState } from "../src/ledger/leases.js";
 
@@ -67,13 +73,15 @@ function createFakeDb(): LedgerDb {
       throw new Error(`Unhandled SQL in fake db: ${sql}`);
     },
     async query<T>(sql: string, params: unknown[] = []): Promise<T[]> {
-      if (sql.includes("WHERE issue_id") && sql.includes("ORDER BY created_at DESC LIMIT 1")) {
-        const [issueId] = params;
-        return decisions.filter((r) => r.issue_id === issueId).slice(0, 1) as T[];
+      if (sql.includes("company_id = $1 AND issue_id = $2") && sql.includes("ORDER BY created_at DESC LIMIT 1")) {
+        const [companyId, issueId] = params;
+        return decisions.filter((r) => r.company_id === companyId && r.issue_id === issueId).slice(0, 1) as T[];
       }
-      if (sql.includes("WHERE issue_id") && sql.includes("LIMIT $2")) {
-        const [issueId, limit] = params as [string, number];
-        return decisions.filter((r) => r.issue_id === issueId).slice(0, limit) as T[];
+      if (sql.includes("company_id = $1 AND issue_id = $2") && sql.includes("LIMIT $3")) {
+        const [companyId, issueId, limit] = params as [string, string, number];
+        return decisions
+          .filter((r) => r.company_id === companyId && r.issue_id === issueId)
+          .slice(0, limit) as T[];
       }
       if (sql.includes("avg(confidence)")) {
         const [companyId, policy] = params as [string, string];
@@ -115,7 +123,7 @@ describe("ledger/decisions", () => {
       mode: "shadow",
     });
 
-    const beforeComplete = await getLatestDecision(db, "issue_1");
+    const beforeComplete = await getLatestDecision(db, "company_1", "issue_1");
     expect(beforeComplete?.outcome).toBe("observed");
     expect(beforeComplete?.stateHash).toBe("");
 
@@ -131,7 +139,7 @@ describe("ledger/decisions", () => {
       reason: "noul-above-threshold",
     });
 
-    const after = await getLatestDecision(db, "issue_1");
+    const after = await getLatestDecision(db, "company_1", "issue_1");
     expect(after?.stateHash).toBe("abc123");
     expect(after?.confidence).toBe(0.9);
     expect(after?.answers).toEqual({ pong: { type: "noul", noul: 0.9 } });
@@ -160,7 +168,7 @@ describe("ledger/decisions", () => {
       reason: "noul-above-threshold",
     });
 
-    const row = await getLatestDecision(db, "issue_1");
+    const row = await getLatestDecision(db, "company_1", "issue_1");
     expect(Object.keys(row ?? {})).not.toContain("state");
     expect(Object.keys(row ?? {})).not.toContain("rawState");
   });
@@ -193,6 +201,55 @@ describe("ledger/decisions", () => {
     const aggregate = await getPolicyAggregate(db, "company_1", "ping");
     expect(aggregate.decisionCount).toBe(3);
     expect(aggregate.outcomeBreakdown).toEqual({ observed: 2, error: 1 });
+  });
+
+  it("never returns another company's decisions for the same issue id", async () => {
+    const db = createFakeDb();
+    await beginDecision(db, {
+      companyId: "company_1",
+      issueId: "shared_issue",
+      policy: "ping",
+      policyVersion: "1.0.0",
+      questionVersion: "1.0.0",
+      model: "jev-1.13.0",
+      mode: "shadow",
+    });
+    await beginDecision(db, {
+      companyId: "company_2",
+      issueId: "shared_issue",
+      policy: "ping",
+      policyVersion: "1.0.0",
+      questionVersion: "1.0.0",
+      model: "jev-1.13.0",
+      mode: "shadow",
+    });
+
+    const latestForCompany1 = await getLatestDecision(db, "company_1", "shared_issue");
+    expect(latestForCompany1?.companyId).toBe("company_1");
+
+    const historyForCompany2 = await listDecisionHistory(db, "company_2", "shared_issue");
+    expect(historyForCompany2).toHaveLength(1);
+    expect(historyForCompany2[0]?.companyId).toBe("company_2");
+
+    const latestForUnrelatedCompany = await getLatestDecision(db, "company_3", "shared_issue");
+    expect(latestForUnrelatedCompany).toBeNull();
+  });
+
+  it("caps listDecisionHistory's limit regardless of what the caller requests", async () => {
+    const inner = createFakeDb();
+    const queriedLimits: unknown[] = [];
+    const db: LedgerDb = {
+      namespace: inner.namespace,
+      execute: inner.execute.bind(inner),
+      query: (sql, params = []) => {
+        if (sql.includes("LIMIT $3")) queriedLimits.push(params[2]);
+        return inner.query(sql, params);
+      },
+    };
+
+    await listDecisionHistory(db, "company_1", "issue_1", 100_000);
+
+    expect(queriedLimits).toEqual([100]);
   });
 });
 

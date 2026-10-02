@@ -1,5 +1,6 @@
 import type { JevClient } from "../jev/client.js";
 import type { JevAnswer } from "../jev/types.js";
+import { classifyError } from "../jev/errors.js";
 import { beginDecision, completeDecision, type DecisionOutcome, type LedgerDb } from "../ledger/index.js";
 import { policyConfigFor, type JevConfig, type PolicyMode } from "../config.js";
 import { applyDecision, type ApplyDeps } from "../apply/index.js";
@@ -115,7 +116,7 @@ export async function runPolicy<TState>(
       usage: { input_tokens: 0, output_tokens: 0 },
       costUsd: 0,
       outcome: "error",
-      reason: error instanceof Error ? error.message.slice(0, 500) : "unknown-error",
+      reason: classifyError(error),
     });
     throw error;
   }

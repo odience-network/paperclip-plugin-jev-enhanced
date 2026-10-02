@@ -1,7 +1,7 @@
 -- jev_decisions: one row per policy evaluation. Holds structured answers and
 -- usage metadata only — never raw issue state or free text (see ARCHITECTURE.md
 -- "Security posture"). The decision+audit row is written BEFORE the provider
--- call completes persists (see src/ledger/index.ts `recordDecisionPending`).
+-- call completes (see src/ledger/decisions.ts `beginDecision`).
 CREATE TABLE plugin_jev_0ba1dfa31d.jev_decisions (
   id uuid PRIMARY KEY,
   company_id uuid NOT NULL,
