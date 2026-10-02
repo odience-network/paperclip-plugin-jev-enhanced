@@ -9,7 +9,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     # `.paperclip-sdk/*.tgz` are vendored, checked-in copies of the live Paperclip
-    # SDK packages, so `pnpm install` never reaches the network here.
+    # SDK packages, so they never need to hit the registry. Other deps (zod,
+    # @typesafe-ai/sdk) still install from the registry here; "no network" in
+    # this plugin's design only covers the test/eval runtime, not `pnpm install`.
     steps:
       - uses: actions/checkout@v4
 
@@ -23,7 +25,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --offline
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck
         run: pnpm typecheck
