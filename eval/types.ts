@@ -1,4 +1,5 @@
 import type { JevAnswer } from "../src/jev/types.js";
+import type { EvalMetrics } from "./metrics.js";
 
 /**
  * One recorded fixture row: a state, the provider's recorded answers for it
@@ -28,4 +29,18 @@ export interface EvalResult {
   correct: boolean;
   latencyMs?: number;
   costUsd?: number;
+}
+
+/**
+ * Machine-readable sibling of a report script's `.md` output
+ * (`eval/reports/<policy>.json`), the source `src/eval-reports/index.ts`
+ * imports for `calibration-summary` instead of hand-pasted literals.
+ * Regenerate by re-running the report script; never hand-edit.
+ */
+export interface CalibrationReportJson {
+  policy: string;
+  generatedAt: string;
+  datasetSize: number;
+  metrics: EvalMetrics;
+  recommendedThresholds?: Record<string, number>;
 }

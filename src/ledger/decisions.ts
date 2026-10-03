@@ -259,6 +259,95 @@ export async function listRecentDecisionsForPolicy(
   return rows.map(fromDbRow);
 }
 
+/** Same tenant guard as `getLatestDecision`: `companyId` is always part of the
+ * `WHERE` clause so a decision id alone can never leak another company's row
+ * (needed before trusting a UI-supplied `decisionId` in the `feedback` action). */
+export async function getDecisionById(db: LedgerDb, companyId: string, id: string): Promise<DecisionRow | null> {
+  const rows = await db.query<DecisionDbRow>(
+    `SELECT * FROM ${tableName(db, "jev_decisions")}
+     WHERE company_id = $1 AND id = $2 LIMIT 1`,
+    [companyId, id],
+  );
+  return rows[0] ? fromDbRow(rows[0]) : null;
+}
+
+/**
+ * The latest decision per policy for one issue — what the T5 issue detail tab
+ * shows above the full history list. `DISTINCT ON` (policy) combined with
+ * `ORDER BY policy, created_at DESC` keeps only the newest row per policy.
+ */
+export async function listLatestDecisionsByPolicy(
+  db: LedgerDb,
+  companyId: string,
+  issueId: string,
+): Promise<DecisionRow[]> {
+  const rows = await db.query<DecisionDbRow>(
+    `SELECT DISTINCT ON (policy) * FROM ${tableName(db, "jev_decisions")}
+     WHERE company_id = $1 AND issue_id = $2
+     ORDER BY policy, created_at DESC`,
+    [companyId, issueId],
+  );
+  return rows.map(fromDbRow);
+}
+
+export interface DailyDecisionStat {
+  day: string;
+  decisionCount: number;
+  totalCostUsd: number;
+}
+
+interface DailyStatDbRow {
+  day: string;
+  decision_count: string;
+  total_cost_usd: string | null;
+}
+
+/** Decisions-per-day and cost-per-day for the T5 dashboard widget, over the
+ * trailing window starting at `sinceIso` (an ISO timestamp, computed by the
+ * caller so this stays testable without a real clock). */
+export async function getDailyDecisionStats(
+  db: LedgerDb,
+  companyId: string,
+  sinceIso: string,
+): Promise<DailyDecisionStat[]> {
+  const rows = await db.query<DailyStatDbRow>(
+    `SELECT date_trunc('day', created_at AT TIME ZONE 'UTC')::text AS day,
+            count(*)::text AS decision_count,
+            coalesce(sum(cost_usd), 0)::text AS total_cost_usd
+     FROM ${tableName(db, "jev_decisions")}
+     WHERE company_id = $1 AND created_at >= $2
+     GROUP BY day
+     ORDER BY day`,
+    [companyId, sinceIso],
+  );
+  return rows.map((row) => ({
+    day: row.day,
+    decisionCount: Number.parseInt(row.decision_count, 10),
+    totalCostUsd: row.total_cost_usd ? Number.parseFloat(row.total_cost_usd) : 0,
+  }));
+}
+
+interface ModeSplitDbRow {
+  mode: PolicyMode;
+  count: string;
+}
+
+/** Shadow vs. suggest vs. enforce split for the T5 dashboard widget. */
+export async function getModeSplit(db: LedgerDb, companyId: string): Promise<Record<PolicyMode, number>> {
+  const rows = await db.query<ModeSplitDbRow>(
+    `SELECT mode, count(*)::text AS count
+     FROM ${tableName(db, "jev_decisions")}
+     WHERE company_id = $1
+     GROUP BY mode`,
+    [companyId],
+  );
+  const split: Record<PolicyMode, number> = { shadow: 0, suggest: 0, enforce: 0 };
+  for (const row of rows) {
+    split[row.mode] = Number.parseInt(row.count, 10);
+  }
+  return split;
+}
+
 export interface PolicyAggregate {
   policy: string;
   companyId: string;

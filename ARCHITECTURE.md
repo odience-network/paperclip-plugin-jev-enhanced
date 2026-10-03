@@ -518,6 +518,73 @@ a dedicated report script instead (`eval/report-issue-triage.ts`,
 the same pattern, each keyed to its own policy's apply-eligible field);
 `eval/run.ts` itself is left generic rather than special-cased per policy.
 
+Both report scripts also write a machine-readable sibling JSON file next to
+their `.md` report (`eval/reports/<policy>.json`), with the same metrics the
+markdown prose describes (`count`/`accuracy`/`agreement`/`ece`/
+`avgLatencyMs`/`avgCostUsd`/`totalCostUsd`, plus `recommendedThresholds` for
+`issue-triage`). `src/eval-reports/index.ts` imports those JSON files
+directly (an ordinary ESM JSON import, resolved at build time, not a runtime
+filesystem read) and re-exports them as `CALIBRATION_REPORTS`, so the
+settings page's calibration table always reflects the last committed eval
+run with no hand-pasted numbers to drift out of sync. Regenerate both the
+`.md` and `.json` together by re-running the report script; never hand-edit
+either.
+
+## Plugin UI
+
+`src/ui/index.tsx` re-exports three components, one per manifest `ui.slots`
+entry (`src/manifest.ts`):
+
+- **`IssueDecisionsTab`** (`src/ui/issue-tab.tsx`, `detailTab` slot) — the
+  latest decision per policy for the current issue (confidence, margin,
+  mode, cost, outcome) with Accept/Override buttons that call the `feedback`
+  action, a "Triage now" button that calls the `triage-issue` action (the
+  same action `issue.created`/`issue.updated` and the backlog sweep job use
+  — see "Policies > `issue-triage`" above), and the full decision history
+  below. Reads via `usePluginData("decisions-latest-by-policy")` and
+  `usePluginData("decisions-history")`.
+- **`DashboardWidget`** (`src/ui/dashboard-widget.tsx`, `dashboardWidget`
+  slot) — 30-day decision count and cost, human-feedback agreement rate,
+  shadow/suggest/enforce mode split, and TypeSafe provider health. Reads via
+  `usePluginData("dashboard-summary")`.
+- **`SettingsPage`** (`src/ui/settings-page.tsx`, `settingsPage` slot) —
+  company-scoped config (model, base URL, daily token budget, redaction
+  patterns, respect-existing-fields, and per-policy enabled/mode/thresholds),
+  a Test Connection button, and a calibration summary table sourced from
+  `usePluginData("calibration-summary")` (backed by `src/eval-reports/index.ts`,
+  above). The TypeSafe API key is shown as bound/unbound only — this form
+  never reads or writes `apiKeyRef`'s value, only passes it through
+  unchanged on save.
+
+  **Same-origin fetch, narrowly, for config load/save only.** Every other
+  plugin data/action flows through the bridge (`usePluginData`/
+  `usePluginAction`), per the no-same-origin-JS rule. `settingsPage` is the
+  one exception: `PluginConfigClient` (the worker-side SDK type) only
+  exposes `get()`, with no write path, so a worker action can't save config
+  on this SDK version. Until the SDK adds a config write method, this form
+  calls the host's own `/api/plugins/odience.jev/config` route directly
+  (`GET` to load, `POST` to save) with `credentials: "include"`, and
+  `POST .../config/test` to invoke `onValidateConfig` for Test Connection
+  without persisting. Remove this workaround and switch to a bridge action
+  the moment the SDK ships a config-write primitive. No other surface in
+  this plugin (data handler, action, or UI component) may call a host route
+  directly — this carve-out is scoped to config load/save/test on the
+  settings page only.
+
+None of these files may import worker-side modules (`src/ledger/*`,
+`src/policies/*`, `src/config.ts`): those pull in `node:crypto`, `zod`, and
+`@typesafe-ai/sdk`, none of which belong in a browser bundle. `src/ui/types.ts`
+declares local mirrors of the worker-side row/summary shapes instead of
+importing them, and `settings-page.tsx` hardcodes the plugin id and the
+policy name registry for the same reason.
+
+Component tests (`tests/ui/*.spec.tsx`, jsdom + Testing Library) cover
+loading/empty/error/populated states for all three surfaces.
+`tests/helpers/ui-bridge.ts` installs a real `globalThis.__paperclipPluginBridge__`
+backed by `createTestHarness` and the same fake ledger db the worker tests
+use, so the issue tab's Accept/Override round-trip is verified against a
+real `feedback` action call and a real ledger read, not a mock.
+
 ## Deployment
 
 ### Install (board user only)
