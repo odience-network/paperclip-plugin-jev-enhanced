@@ -125,4 +125,49 @@ describe("plugin scaffold", () => {
     expect(result?.ok).toBe(true);
     expect(result?.warnings?.[0]).toMatch(/Could not verify the connection/);
   });
+
+  it("decisions-history falls back to the default limit when params.limit is NaN or fractional", async () => {
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities, "events.emit"] });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.getData("decisions-history", { companyId: "company_1", issueId: "issue_1", limit: Number.NaN });
+    await harness.getData("decisions-history", { companyId: "company_1", issueId: "issue_1", limit: 2.5 });
+
+    const limitQueries = harness.dbQueries.filter((q) => q.sql.includes("LIMIT $3"));
+    expect(limitQueries).toHaveLength(2);
+    for (const query of limitQueries) {
+      expect(query.params?.[2]).toBe(20);
+    }
+  });
+
+  it("decisions-history passes an in-range integer limit through unchanged", async () => {
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities, "events.emit"] });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.getData("decisions-history", { companyId: "company_1", issueId: "issue_1", limit: 5 });
+
+    const limitQuery = harness.dbQueries.find((q) => q.sql.includes("LIMIT $3"));
+    expect(limitQuery?.params?.[2]).toBe(5);
+  });
+
+  it("decisions-history trusts whatever companyId lands in params.companyId, including an unscoped (admin-only) bridge call that the host leaves unoverridden — see the requireCompanyId doc comment", async () => {
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities, "events.emit"] });
+    await plugin.definition.setup(harness.ctx);
+
+    // The real host only omits its own authorized scope for an unscoped,
+    // instance-admin-only bridge call; the test harness's `getData` always
+    // passes `params` straight through, so this simulates that path.
+    await harness.getData("decisions-history", { companyId: "company_admin_supplied", issueId: "issue_1" });
+
+    const query = harness.dbQueries.find((q) => q.sql.includes("LIMIT $3"));
+    expect(query?.params?.[0]).toBe("company_admin_supplied");
+  });
+
+  it("decisions-latest and decisions-history reject calls with no companyId at all", async () => {
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities, "events.emit"] });
+    await plugin.definition.setup(harness.ctx);
+
+    await expect(harness.getData("decisions-latest", { issueId: "issue_1" })).rejects.toThrow(/companyId is required/);
+    await expect(harness.getData("decisions-history", { issueId: "issue_1" })).rejects.toThrow(/companyId is required/);
+  });
 });
