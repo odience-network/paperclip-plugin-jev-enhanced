@@ -47,8 +47,33 @@ import {
   type JevVerifyParams,
   type JevRerankParams,
 } from "./tools/schemas.js";
+import { guardEvaluateRequestSchema } from "./guard/types.js";
+import { evaluateGuard } from "./guard/evaluate.js";
+import { createGuardRateLimiter, type GuardRateLimiter } from "./guard/rateLimit.js";
 
 const jevCache = createInMemoryJevCache();
+
+/** One rate limiter per company, sized from that company's own
+ * `guardRails.rateLimit` config the first time `guard/evaluate` sees it. A
+ * config change to the limits only takes effect on worker restart —
+ * acceptable for a DoS backstop whose defaults are the same for everyone. */
+const guardRateLimiters = new Map<string, GuardRateLimiter>();
+
+function guardRateLimiterFor(companyId: string, config: JevConfig): GuardRateLimiter {
+  let limiter = guardRateLimiters.get(companyId);
+  if (!limiter) {
+    limiter = createGuardRateLimiter(config.guardRails.rateLimit.requestsPerSecond, config.guardRails.rateLimit.tokensPerSecond);
+    guardRateLimiters.set(companyId, limiter);
+  }
+  return limiter;
+}
+
+/** Rough, cheap token estimate for the rate limiter — not the billed usage
+ * (that comes back from Jev itself after the call). Good enough to size a
+ * DoS backstop; off by 2x in either direction doesn't matter here. */
+function estimateRequestTokens(excerpt: string | undefined): number {
+  return 200 + Math.ceil((excerpt?.length ?? 0) / 4);
+}
 
 /** This plugin's own `originKind` — `preFilter` uses it to never triage an
  * issue the plugin itself created, matching `manifest.ts`'s `id`. */
@@ -301,6 +326,44 @@ function requireCompanyId(params: Record<string, unknown>): string {
     throw new Error("companyId is required");
   }
   return companyId;
+}
+
+/** Handles `POST /guard/evaluate` for the harness hooks. Body shape is
+ * validated here (never trusted from the request) before anything else runs;
+ * the rate limiter is consulted before the issue fetch / Jev call so a
+ * rate-limited caller never costs more than a map lookup and a bucket check. */
+async function handleGuardEvaluate(ctx: PluginContext, input: PluginApiRequestInput): Promise<PluginApiResponse> {
+  const parsed = guardEvaluateRequestSchema.safeParse(input.body);
+  if (!parsed.success) {
+    return { status: 400, body: { error: "invalid guard/evaluate request", issues: parsed.error.issues } };
+  }
+  const request = parsed.data;
+
+  const config = await loadConfig(ctx, input.companyId);
+  const limiter = guardRateLimiterFor(input.companyId, config);
+  if (!limiter.tryConsume(input.companyId, estimateRequestTokens(request.excerpt))) {
+    return { status: 429, body: { error: "rate limit exceeded" } };
+  }
+
+  const client = buildClient(ctx, config);
+  const issue = request.issueId ? await ctx.issues.get(request.issueId, input.companyId) : null;
+
+  const result = await evaluateGuard(request, {
+    client,
+    db: ctx.db,
+    config,
+    companyId: input.companyId,
+    agentId: input.actor.agentId ?? null,
+    issue: issue ? { title: issue.title, description: issue.description } : null,
+    rails: {
+      state: ctx.state,
+      interactions: {
+        listInteractions: (issueId, companyId) => ctx.issues.listInteractions(issueId, companyId),
+      },
+    },
+  });
+
+  return { status: 200, body: result };
 }
 
 const plugin = definePlugin({
@@ -733,6 +796,8 @@ const plugin = definePlugin({
           ? { status: 200, body: outcome.result }
           : { status: statusForToolError(outcome.error), body: { error: outcome.error } };
       }
+      case "guard-evaluate":
+        return handleGuardEvaluate(ctx, input);
       default:
         return { status: 404, body: { error: `unknown route: ${input.routeKey}` } };
     }

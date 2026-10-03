@@ -32,6 +32,63 @@ const policyConfigSchema = z.object({
 });
 export type PolicyConfig = z.infer<typeof policyConfigSchema>;
 
+/** Tools JevGuard treats as read-only by default: skipped before any Jev call
+ * (and before the loop guard / override-stamp rails even run), since they
+ * cannot mutate state or exfiltrate beyond what the agent already saw. Kept
+ * deliberately short — anything with network or write side effects (`Bash`,
+ * `WebFetch`, `Write`, `Edit`, `NotebookEdit`) must go through the full rail
+ * + Jev pipeline even if a specific invocation looks harmless. */
+const DEFAULT_READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "TodoWrite", "NotebookRead"];
+
+const guardRateLimitConfigSchema = z.object({
+  requestsPerSecond: z.number().int().positive().default(40),
+  tokensPerSecond: z.number().int().positive().default(100_000),
+});
+
+const loopGuardConfigSchema = z.object({
+  /** Sliding window of the most recent PreToolUse calls (per run) considered
+   * when counting repeats. */
+  windowSize: z.number().int().positive().default(8),
+  /** Identical (tool, canonicalized-input) calls within the window at or
+   * above this count trip the loop guard. */
+  threshold: z.number().int().positive().default(3),
+  /** Decision forced when the loop guard trips. Never `"allow"` — a detected
+   * loop must never be silently waved through. */
+  action: z.enum(["ask", "deny"]).default("ask"),
+});
+export type LoopGuardConfig = z.infer<typeof loopGuardConfigSchema>;
+
+const guardRailsConfigSchema = z.object({
+  /**
+   * Emergency override, independent of any policy's `mode`. `"deny-all"`
+   * fails every PreToolUse/PostToolUse call closed without calling Jev —
+   * for an active incident. `"allow-all"` bypasses the guard entirely
+   * (including rails) — only for recovering from a Jev/host outage that is
+   * itself blocking legitimate work; document the reason in config history
+   * before flipping it.
+   */
+  killSwitch: z.enum(["none", "allow-all", "deny-all"]).default("none"),
+  readOnlyTools: z.array(z.string()).default(DEFAULT_READ_ONLY_TOOLS),
+  /** Always denied before any Jev call, regardless of mode. */
+  blockedTools: z.array(z.string()).default([]),
+  /** Always allowed before any Jev call, regardless of mode. Distinct from
+   * `readOnlyTools`: entries here are an explicit operator allowlist, not an
+   * inferred-safe default. */
+  alwaysAllowTools: z.array(z.string()).default([]),
+  loopGuard: loopGuardConfigSchema.default(loopGuardConfigSchema.parse({})),
+  /** An accepted override stamp older than this is rejected, so a single
+   * confirmation can't be replayed indefinitely across unrelated later calls. */
+  overrideFreshnessMs: z.number().int().positive().default(900_000),
+  /** Wall-clock budget for the Jev call inside `guard/evaluate`. On timeout,
+   * Pre/Post fail open to `allow` and Stop fails open to `allow` UNLESS the
+   * deterministic rails already escalated this call toward a `deny`-capable
+   * path, in which case it fails closed to `ask` (Pre/Post) — see
+   * `src/guard/evaluate.ts`. */
+  timeBudgetMs: z.number().int().positive().default(1500),
+  rateLimit: guardRateLimitConfigSchema.default(guardRateLimitConfigSchema.parse({})),
+});
+export type GuardRailsConfig = z.infer<typeof guardRailsConfigSchema>;
+
 export const jevConfigSchema = z.object({
   apiKeyRef: secretRefSchema.optional(),
   model: z.string().min(1).default(DEFAULT_JEV_MODEL),
@@ -41,6 +98,7 @@ export const jevConfigSchema = z.object({
   policies: z.record(z.string(), policyConfigSchema).default({}),
   redactionPatterns: z.array(z.string()).default([]),
   respectExistingFields: z.boolean().default(true),
+  guardRails: guardRailsConfigSchema.default(guardRailsConfigSchema.parse({})),
 });
 export type JevConfig = z.infer<typeof jevConfigSchema>;
 

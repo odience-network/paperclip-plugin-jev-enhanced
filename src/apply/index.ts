@@ -90,6 +90,17 @@ async function applyObserveOnly(input: ApplyInput, deps: ApplyDeps): Promise<voi
   deps.log(`jev.apply.${input.policy}.no-op`, { reason: "observe-only-policy" });
 }
 
+/**
+ * The guard policies' only side effect is the `allow`/`ask`/`deny` decision
+ * already returned synchronously to the calling hook by `evaluateGuard` —
+ * there is nothing further to apply here even in `enforce` mode. These
+ * handlers exist so `applyDecision` doesn't log a missing-handler warning
+ * if a guard policy's ledger row is ever replayed through this path.
+ */
+async function applyGuard(input: ApplyInput, deps: ApplyDeps): Promise<void> {
+  deps.log("jev.apply.guard", { policy: input.policy, verdict: input.verdict.verdict, runId: input.ctx.runId ?? null });
+}
+
 export const applyHandlers: Record<string, ApplyFn> = {
   ping: applyPing,
   "issue-triage": applyIssueTriage,
@@ -97,6 +108,9 @@ export const applyHandlers: Record<string, ApplyFn> = {
   "classify-task": applyObserveOnly,
   verify: applyObserveOnly,
   rerank: applyObserveOnly,
+  "guard-pre": applyGuard,
+  "guard-post": applyGuard,
+  "guard-stop": applyGuard,
 };
 
 export async function applyDecision(input: ApplyInput, deps: ApplyDeps): Promise<void> {
