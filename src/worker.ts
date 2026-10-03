@@ -886,10 +886,19 @@ const plugin = definePlugin({
           runId: runCtx.runId,
           agentId: runCtx.agentId,
           log: (message, fields) => ctx.logger.info(message, fields),
+          findConfirmation: async (input) => {
+            const interactions = await ctx.issues.listInteractions(input.issueId, runCtx.companyId);
+            const match = interactions.find(
+              (interaction) => interaction.kind === "request_confirmation" && interaction.idempotencyKey === input.idempotencyKey,
+            );
+            if (!match) return null;
+            return { id: match.id, status: match.status };
+          },
           requestConfirmation: async (input) => {
             const interaction = await ctx.issues.requestConfirmation(
               input.issueId,
               {
+                idempotencyKey: input.idempotencyKey,
                 resolverPolicy: "human_only",
                 continuationPolicy: "wake_assignee_on_accept",
                 payload: {

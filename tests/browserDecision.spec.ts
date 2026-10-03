@@ -156,8 +156,12 @@ describe("decideBrowserAction origin allowlist", () => {
   });
 });
 
-describe("decideBrowserAction decisions", () => {
-  it("returns the decided action and resolved target index for an allowlisted, non-sensitive request", async () => {
+function suggestConfig(overrides: Partial<JevConfig> = {}) {
+  return baseConfig({ policies: { "browser-action": { enabled: true, mode: "suggest", thresholds: {} } }, ...overrides });
+}
+
+describe("decideBrowserAction shadow mode", () => {
+  it("is non-actionable by default: action is 'blocked' even when the policy would have acted", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
     const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
 
@@ -168,34 +172,17 @@ describe("decideBrowserAction decisions", () => {
 
     expect(result).toMatchObject({
       outcome: "observed",
-      action: "click",
+      action: "blocked",
+      observedAction: "click",
+      reason: "shadow-mode",
       targetIndex: 1,
       sensitive: false,
       requiresConfirmation: false,
       confirmationInteractionId: null,
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("maps enforce mode to an 'applied' outcome when the action clears every gate", async () => {
-    const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
-
-    const result = await decideBrowserAction(
-      { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
-      {
-        client,
-        db: createFakeDb(),
-        config: baseConfig({ policies: { "browser-action": { enabled: true, mode: "enforce", thresholds: {} } } }),
-        companyId: "company_1",
-        log: vi.fn(),
-      },
-    );
-
-    expect(result).toMatchObject({ outcome: "applied", action: "click" });
-  });
-
-  it("stays 'blocked' even in enforce mode when sensitivity requires confirmation, and opens a confirmation card", async () => {
+  it("never opens a confirmation card, even when the action would be sensitivity-gated", async () => {
     const fetchImpl = vi.fn<Fetch>(async () =>
       jsonResponse(clickAnswers({ sensitivity: { type: "noul", noul: 0.9 } })),
     );
@@ -204,27 +191,72 @@ describe("decideBrowserAction decisions", () => {
 
     const result = await decideBrowserAction(
       { issueId: "issue_1", goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
+      { client, db: createFakeDb(), config: baseConfig(), companyId: "company_1", log: vi.fn(), requestConfirmation },
+    );
+
+    expect(result).toMatchObject({
+      outcome: "observed",
+      action: "blocked",
+      observedAction: "click",
+      requiresConfirmation: false,
+      confirmationInteractionId: null,
+    });
+    expect(requestConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("keeps the deterministic block reason (not 'shadow-mode') when a gate would have blocked anyway", async () => {
+    const fetchImpl = vi.fn<Fetch>(async () =>
+      jsonResponse(clickAnswers({ target_0: { type: "noul", noul: 0.1 }, target_1: { type: "noul", noul: 0.1 } })),
+    );
+    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+
+    const result = await decideBrowserAction(
+      { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
+      { client, db: createFakeDb(), config: baseConfig(), companyId: "company_1", log: vi.fn() },
+    );
+
+    expect(result).toMatchObject({ outcome: "observed", action: "blocked", reason: "no-target-resolved" });
+  });
+});
+
+describe("decideBrowserAction suggest/enforce mode", () => {
+  it("returns the decided action and resolved target index for an allowlisted, non-sensitive request", async () => {
+    const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
+    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+
+    const result = await decideBrowserAction(
+      { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
+      { client, db: createFakeDb(), config: suggestConfig(), companyId: "company_1", log: vi.fn() },
+    );
+
+    expect(result).toMatchObject({
+      outcome: "suggested",
+      action: "click",
+      observedAction: "click",
+      targetIndex: 1,
+      sensitive: false,
+      requiresConfirmation: false,
+      confirmationInteractionId: null,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps enforce mode to a 'suggested' outcome (never 'applied') since the tool is always advisory", async () => {
+    const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
+    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+
+    const result = await decideBrowserAction(
+      { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
       {
         client,
         db: createFakeDb(),
         config: baseConfig({ policies: { "browser-action": { enabled: true, mode: "enforce", thresholds: {} } } }),
         companyId: "company_1",
         log: vi.fn(),
-        requestConfirmation,
       },
     );
 
-    expect(result).toMatchObject({
-      outcome: "blocked",
-      action: "blocked",
-      pendingAction: "click",
-      reason: "sensitive-awaiting-confirmation",
-      requiresConfirmation: true,
-      confirmationInteractionId: "interaction_1",
-    });
-    expect(requestConfirmation).toHaveBeenCalledWith(
-      expect.objectContaining({ issueId: "issue_1", action: "click", targetIndex: 1 }),
-    );
+    expect(result).toMatchObject({ outcome: "suggested", action: "click" });
   });
 
   it("never emits a selector in its response, only an element index", async () => {
@@ -233,24 +265,25 @@ describe("decideBrowserAction decisions", () => {
 
     const result = await decideBrowserAction(
       { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
-      { client, db: createFakeDb(), config: baseConfig(), companyId: "company_1", log: vi.fn() },
+      { client, db: createFakeDb(), config: suggestConfig(), companyId: "company_1", log: vi.fn() },
     );
 
     expect(JSON.stringify(result)).not.toMatch(/selector|xpath|css/i);
   });
 
-  it("does not request confirmation when no issueId or requestConfirmation hook was provided", async () => {
-    const fetchImpl = vi.fn<Fetch>(async () =>
-      jsonResponse(clickAnswers({ sensitivity: { type: "noul", noul: 0.9 } })),
-    );
+  it("sends only origin + pathname to the provider, never the query string or fragment", async () => {
+    const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
     const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
 
-    const result = await decideBrowserAction(
-      { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
-      { client, db: createFakeDb(), config: baseConfig(), companyId: "company_1", log: vi.fn() },
+    await decideBrowserAction(
+      { goal: GOAL, url: `${ALLOWED_URL}?token=secret123#fragment-token`, elements: ELEMENTS },
+      { client, db: createFakeDb(), config: suggestConfig(), companyId: "company_1", log: vi.fn() },
     );
 
-    expect(result).toMatchObject({ outcome: "blocked", requiresConfirmation: true, confirmationInteractionId: null });
+    const [, requestInit] = fetchImpl.mock.calls[0]!;
+    const body = JSON.parse(String(requestInit?.body));
+    expect(JSON.stringify(body)).not.toMatch(/token=secret123|fragment-token/);
+    expect(JSON.stringify(body)).toContain(ALLOWED_URL);
   });
 
   it("records outcome 'error' and rethrows when the provider call fails", async () => {
@@ -260,8 +293,228 @@ describe("decideBrowserAction decisions", () => {
     await expect(
       decideBrowserAction(
         { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
-        { client, db: createFakeDb(), config: baseConfig(), companyId: "company_1", log: vi.fn() },
+        { client, db: createFakeDb(), config: suggestConfig(), companyId: "company_1", log: vi.fn() },
       ),
     ).rejects.toThrow();
+  });
+});
+
+describe("decideBrowserAction confirm-mutation workflow", () => {
+  function sensitiveFetch() {
+    return vi.fn<Fetch>(async () => jsonResponse(clickAnswers({ sensitivity: { type: "noul", noul: 0.9 } })));
+  }
+
+  it("opens a confirmation card with an idempotency key when none exists yet", async () => {
+    const fetchImpl = sensitiveFetch();
+    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const findConfirmation = vi.fn(async () => null);
+    const requestConfirmation = vi.fn(async () => ({ interactionId: "interaction_1" }));
+
+    const result = await decideBrowserAction(
+      { issueId: "issue_1", goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
+      {
+        client,
+        db: createFakeDb(),
+        config: suggestConfig(),
+        companyId: "company_1",
+        log: vi.fn(),
+        findConfirmation,
+        requestConfirmation,
+      },
+    );
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      action: "blocked",
+      observedAction: "click",
+      reason: "sensitive-awaiting-confirmation",
+      requiresConfirmation: true,
+      confirmationInteractionId: "interaction_1",
+    });
+    expect(findConfirmation).toHaveBeenCalledWith(
+      expect.objectContaining({ issueId: "issue_1", idempotencyKey: expect.stringContaining("jev:browser:issue_1:") }),
+    );
+    expect(requestConfirmation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issueId: "issue_1",
+        action: "click",
+        targetIndex: 1,
+        url: ALLOWED_URL,
+        idempotencyKey: expect.stringContaining("jev:browser:issue_1:"),
+      }),
+    );
+  });
+
+  it("does not open a new card when a matching one is already pending", async () => {
+    const fetchImpl = sensitiveFetch();
+    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const findConfirmation = vi.fn(async () => ({ id: "interaction_existing", status: "pending" as const }));
+    const requestConfirmation = vi.fn(async () => ({ interactionId: "interaction_new" }));
+
+    const result = await decideBrowserAction(
+      { issueId: "issue_1", goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
+      {
+        client,
+        db: createFakeDb(),
+        config: suggestConfig(),
+        companyId: "company_1",
+        log: vi.fn(),
+        findConfirmation,
+        requestConfirmation,
+      },
+    );
+
+    expect(result).toMatchObject({
+      action: "blocked",
+      requiresConfirmation: true,
+      confirmationInteractionId: "interaction_existing",
+    });
+    expect(requestConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("unblocks with the observed action once a human accepts the confirmation", async () => {
+    const fetchImpl = sensitiveFetch();
+    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const findConfirmation = vi.fn(async () => ({ id: "interaction_existing", status: "accepted" as const }));
+    const requestConfirmation = vi.fn(async () => ({ interactionId: "interaction_new" }));
+
+    const result = await decideBrowserAction(
+      { issueId: "issue_1", goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
+      {
+        client,
+        db: createFakeDb(),
+        config: suggestConfig(),
+        companyId: "company_1",
+        log: vi.fn(),
+        findConfirmation,
+        requestConfirmation,
+      },
+    );
+
+    expect(result).toMatchObject({
+      outcome: "suggested",
+      action: "click",
+      observedAction: "click",
+      reason: "human-confirmed",
+      requiresConfirmation: false,
+    });
+    expect(requestConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("stays blocked for good once a human rejects the confirmation, without re-asking", async () => {
+    const fetchImpl = sensitiveFetch();
+    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const findConfirmation = vi.fn(async () => ({ id: "interaction_existing", status: "rejected" as const }));
+    const requestConfirmation = vi.fn(async () => ({ interactionId: "interaction_new" }));
+
+    const result = await decideBrowserAction(
+      { issueId: "issue_1", goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
+      {
+        client,
+        db: createFakeDb(),
+        config: suggestConfig(),
+        companyId: "company_1",
+        log: vi.fn(),
+        findConfirmation,
+        requestConfirmation,
+      },
+    );
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      action: "blocked",
+      reason: "human-rejected",
+      requiresConfirmation: false,
+      confirmationInteractionId: null,
+    });
+    expect(requestConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("opens a new card when a prior one for the same key already expired", async () => {
+    const fetchImpl = sensitiveFetch();
+    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const findConfirmation = vi.fn(async () => ({ id: "interaction_stale", status: "expired" as const }));
+    const requestConfirmation = vi.fn(async () => ({ interactionId: "interaction_new" }));
+
+    const result = await decideBrowserAction(
+      { issueId: "issue_1", goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
+      {
+        client,
+        db: createFakeDb(),
+        config: suggestConfig(),
+        companyId: "company_1",
+        log: vi.fn(),
+        findConfirmation,
+        requestConfirmation,
+      },
+    );
+
+    expect(result).toMatchObject({ confirmationInteractionId: "interaction_new" });
+    expect(requestConfirmation).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not request confirmation when no issueId or requestConfirmation hook was provided", async () => {
+    const fetchImpl = sensitiveFetch();
+    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+
+    const result = await decideBrowserAction(
+      { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
+      { client, db: createFakeDb(), config: suggestConfig(), companyId: "company_1", log: vi.fn() },
+    );
+
+    expect(result).toMatchObject({ outcome: "blocked", requiresConfirmation: true, confirmationInteractionId: null });
+  });
+
+  it("does not corrupt the ledger row when requestConfirmation throws: stays 'blocked', not 'error'", async () => {
+    const fetchImpl = sensitiveFetch();
+    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const findConfirmation = vi.fn(async () => null);
+    const requestConfirmation = vi.fn(async () => {
+      throw new Error("issue thread unavailable");
+    });
+
+    const result = await decideBrowserAction(
+      { issueId: "issue_1", goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
+      {
+        client,
+        db: createFakeDb(),
+        config: suggestConfig(),
+        companyId: "company_1",
+        log: vi.fn(),
+        findConfirmation,
+        requestConfirmation,
+      },
+    );
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      action: "blocked",
+      requiresConfirmation: true,
+      confirmationInteractionId: null,
+    });
+  });
+
+  it("falls back to 'not found' (and still gates) when findConfirmation throws", async () => {
+    const fetchImpl = sensitiveFetch();
+    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const findConfirmation = vi.fn(async () => {
+      throw new Error("read failed");
+    });
+    const requestConfirmation = vi.fn(async () => ({ interactionId: "interaction_1" }));
+
+    const result = await decideBrowserAction(
+      { issueId: "issue_1", goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
+      {
+        client,
+        db: createFakeDb(),
+        config: suggestConfig(),
+        companyId: "company_1",
+        log: vi.fn(),
+        findConfirmation,
+        requestConfirmation,
+      },
+    );
+
+    expect(result).toMatchObject({ action: "blocked", confirmationInteractionId: "interaction_1" });
   });
 });

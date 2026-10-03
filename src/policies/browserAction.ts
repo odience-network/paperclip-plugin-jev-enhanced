@@ -118,13 +118,18 @@ export const browserActionPolicy: Policy<BrowserActionState> = {
     );
 
     const targetQuestions = Object.fromEntries(
-      state.elements.map((element) => [
-        targetQuestionKey(element.index),
-        noul(
-          `Is element ${element.index} (role "${element.role}"${element.text ? `, text "${element.text}"` : ""}) ` +
-            `the correct target to achieve the goal: ${state.goal}?`,
-        ),
-      ]),
+      state.elements
+        // A disabled element can never be clicked/typed/selected into, so it's
+        // never worth a target head — this also keeps `resolveTargetIndex`
+        // from ever resolving to one.
+        .filter((element) => !element.disabled)
+        .map((element) => [
+          targetQuestionKey(element.index),
+          noul(
+            `Is element ${element.index} (role "${element.role}"${element.text ? `, text "${element.text}"` : ""}) ` +
+              `the correct target to achieve the goal: ${state.goal}?`,
+          ),
+        ]),
     );
 
     return {

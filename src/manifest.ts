@@ -28,6 +28,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "skills.managed",
     "jobs.schedule",
     "issue.interactions.create",
+    "issue.interactions.read",
     "ui.dashboardWidget.register",
     "ui.detailTab.register",
     "ui.action.register",

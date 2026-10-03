@@ -18,6 +18,33 @@ const secretRefSchema = z.union([
   }),
 ]);
 
+/** Normalizes an allowlist entry to its canonical `scheme://host[:port]` form
+ * (so `"https://App.example.com/"` matches `new URL(...).origin`'s lowercase,
+ * no-trailing-slash output) and rejects anything with a path, query, or
+ * fragment, or a non-http(s) scheme — an allowlist entry is an origin, not a
+ * URL. */
+const browserOriginSchema = z.string().transform((value, ctx) => {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `browserAllowedOrigins entry is not a valid URL: "${value}"` });
+    return z.NEVER;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `browserAllowedOrigins entry must be http or https: "${value}"` });
+    return z.NEVER;
+  }
+  if (url.pathname !== "/" || url.search || url.hash) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `browserAllowedOrigins entry must be an origin with no path, query, or fragment: "${value}"`,
+    });
+    return z.NEVER;
+  }
+  return url.origin;
+});
+
 const policyConfigSchema = z.object({
   enabled: z.boolean().default(true),
   mode: z.enum(POLICY_MODES).default("shadow"),
@@ -111,7 +138,7 @@ export const jevConfigSchema = z.object({
   /** Origins (`https://host[:port]`, no path) `jev:decide-browser-action` may
    * reason about. Checked deterministically before any provider call —
    * never relaxed by a policy threshold or by the model's own judgement. */
-  browserAllowedOrigins: z.array(z.string()).default([]),
+  browserAllowedOrigins: z.array(browserOriginSchema).default([]),
 });
 export type JevConfig = z.infer<typeof jevConfigSchema>;
 
