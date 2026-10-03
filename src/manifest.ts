@@ -27,6 +27,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "agent.tools.register",
     "skills.managed",
     "jobs.schedule",
+    "issue.interactions.create",
     "ui.dashboardWidget.register",
     "ui.detailTab.register",
     "ui.action.register",
@@ -131,6 +132,16 @@ const manifest: PaperclipPluginManifestV1 = {
         description:
           "When true (default), Jev never overwrites an assignee, priority, or status a human already set.",
         "x-paperclip-advanced": true,
+      },
+      browserAllowedOrigins: {
+        type: "array",
+        items: { type: "string" },
+        title: "Browser Tool Allowed Origins",
+        default: [],
+        description:
+          "Origins (e.g. \"https://app.example.com\", no path) `jev:decide-browser-action` may reason about. " +
+          "Checked before any other gate and before any provider call; a URL outside this list is always blocked, " +
+          "empty by default.",
       },
     },
   },
@@ -270,6 +281,45 @@ const manifest: PaperclipPluginManifestV1 = {
           },
         },
         required: ["query", "candidates"],
+      },
+    },
+    {
+      name: "jev-decide-browser-action",
+      displayName: "Jev Decide Browser Action",
+      description:
+        "Given a goal, a page URL, and an indexed table of candidate elements (no selectors, no raw DOM), " +
+        "returns one advisory action from a closed space (click/type/select/scroll/wait/done/blocked) plus the " +
+        "target element index. Never performs the action — the calling harness does. Blocks on origins outside " +
+        "the configured allowlist and on high-sensitivity (payment/credentials/destructive) mutations until a " +
+        "human confirms via the issue thread.",
+      parametersSchema: {
+        type: "object",
+        properties: {
+          issueId: {
+            type: "string",
+            description: "Issue to attach the ledger decision (and, if needed, a confirmation card) to.",
+          },
+          goal: { type: "string", description: "What the agent is trying to accomplish on this page." },
+          url: { type: "string", description: "The current page URL; only its origin is checked against the allowlist." },
+          elements: {
+            type: "array",
+            description: "Indexed, pre-redacted candidate elements. Never include a selector, XPath, or raw HTML.",
+            items: {
+              type: "object",
+              properties: {
+                index: { type: "number" },
+                role: { type: "string" },
+                text: { type: "string" },
+                ariaLabel: { type: "string" },
+                placeholder: { type: "string" },
+                inputType: { type: "string" },
+                disabled: { type: "boolean" },
+              },
+              required: ["index", "role"],
+            },
+          },
+        },
+        required: ["goal", "url", "elements"],
       },
     },
   ],

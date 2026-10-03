@@ -108,6 +108,10 @@ export const jevConfigSchema = z.object({
   redactionPatterns: z.array(z.string()).default([]),
   respectExistingFields: z.boolean().default(true),
   guardRails: guardRailsConfigSchema.default(guardRailsConfigSchema.parse({})),
+  /** Origins (`https://host[:port]`, no path) `jev:decide-browser-action` may
+   * reason about. Checked deterministically before any provider call —
+   * never relaxed by a policy threshold or by the model's own judgement. */
+  browserAllowedOrigins: z.array(z.string()).default([]),
 });
 export type JevConfig = z.infer<typeof jevConfigSchema>;
 

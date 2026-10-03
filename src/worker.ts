@@ -57,6 +57,7 @@ import {
 import { guardEvaluateRequestSchema } from "./guard/types.js";
 import { evaluateGuard, fallbackDecision, POLICY_FOR_HOOK } from "./guard/evaluate.js";
 import { createGuardRateLimiter, type GuardRateLimiter } from "./guard/rateLimit.js";
+import { decideBrowserAction } from "./tools/browserDecision.js";
 
 const jevCache = createInMemoryJevCache();
 
@@ -853,6 +854,63 @@ const plugin = definePlugin({
           { runId: runCtx.runId, agentId: runCtx.agentId },
         );
         return outcome.ok ? { content: JSON.stringify(outcome.result), data: outcome.result } : { error: outcome.error };
+      },
+    );
+
+    ctx.tools.register(
+      "jev-decide-browser-action",
+      {
+        displayName: "Jev Decide Browser Action",
+        description:
+          "Given a goal, a page URL, and an indexed element table, returns one advisory action from a closed " +
+          "space plus the target element index. Never performs the action.",
+        parametersSchema: {
+          type: "object",
+          properties: {
+            issueId: { type: "string" },
+            goal: { type: "string" },
+            url: { type: "string" },
+            elements: { type: "array", items: { type: "object" } },
+          },
+          required: ["goal", "url", "elements"],
+        },
+      },
+      async (params, runCtx) => {
+        const config = await loadConfig(ctx, runCtx.companyId);
+        const client = buildClient(ctx, config);
+        const result = await decideBrowserAction(params, {
+          client,
+          db: ctx.db,
+          config,
+          companyId: runCtx.companyId,
+          runId: runCtx.runId,
+          agentId: runCtx.agentId,
+          log: (message, fields) => ctx.logger.info(message, fields),
+          requestConfirmation: async (input) => {
+            const interaction = await ctx.issues.requestConfirmation(
+              input.issueId,
+              {
+                resolverPolicy: "human_only",
+                continuationPolicy: "wake_assignee_on_accept",
+                payload: {
+                  version: 1,
+                  prompt:
+                    `Jev recommends "${input.action}" on ${input.url} for goal "${input.goal}". This may involve ` +
+                    "payment, credentials, or a destructive change — confirm before the harness proceeds.",
+                  acceptLabel: "Allow",
+                  rejectLabel: "Block",
+                  allowDeclineReason: true,
+                  detailsMarkdown:
+                    `**Goal:** ${input.goal}\n\n**Action:** ${input.action}\n\n**Target element index:** ` +
+                    `${input.targetIndex ?? "none"}\n\n**URL:** ${input.url}`,
+                },
+              },
+              input.companyId,
+            );
+            return { interactionId: interaction.id };
+          },
+        });
+        return { content: JSON.stringify(result), data: result };
       },
     );
   },
