@@ -89,8 +89,15 @@ export const issueTriagePolicy: Policy<IssueTriageState> = {
   /** Stable, issue-intrinsic projection of `state` for `ctx.stateHash`'s
    * dedup check — drops ledger-derived (`isFirstTriage`) and full candidate
    * objects (names/titles churn and bloat the hash for no reason), but keeps
-   * sorted candidate *id* sets so a membership change (new eligible agent, a
-   * newly opened possible duplicate, …) still invalidates it. */
+   * sorted candidate *id* sets so a membership change (e.g. a new eligible
+   * agent) still invalidates it. `recentOpenIssues` is deliberately excluded
+   * even as an id set: it's company-wide "other open issues right now", not
+   * something intrinsic to *this* issue, so opening or closing any unrelated
+   * issue elsewhere changes it for every backlog issue at once — that used
+   * to invalidate every issue's hash on every unrelated issue creation,
+   * making `issue-triage-backlog-sweep`'s dedup check nearly useless. Losing
+   * same-cycle sensitivity to a brand-new possible duplicate is an accepted
+   * tradeoff; the next sweep (or any real field edit) still re-triages. */
   identityState(state) {
     return {
       title: state.title,
@@ -101,7 +108,6 @@ export const issueTriagePolicy: Policy<IssueTriageState> = {
       hasProject: state.hasProject,
       eligibleAgentIds: [...state.eligibleAgents.map((agent) => agent.id)].sort(),
       candidateProjectIds: [...state.candidateProjects.map((project) => project.id)].sort(),
-      recentOpenIssueIds: [...state.recentOpenIssues.map((issue) => issue.id)].sort(),
     };
   },
 

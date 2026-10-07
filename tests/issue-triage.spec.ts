@@ -158,11 +158,26 @@ describe("issueTriagePolicy.identityState", () => {
     expect(issueTriagePolicy.identityState!(a)).toEqual(issueTriagePolicy.identityState!(b));
   });
 
-  it("changes when the candidate id set changes", () => {
+  it("changes when the eligible agent id set changes", () => {
+    const a = baseState({ eligibleAgents: [{ id: "agent_1", name: "Ada", role: "engineer" }] });
+    const b = baseState({
+      eligibleAgents: [
+        { id: "agent_1", name: "Ada", role: "engineer" },
+        { id: "agent_2", name: "Grace", role: "engineer" },
+      ],
+    });
+
+    expect(issueTriagePolicy.identityState!(a)).not.toEqual(issueTriagePolicy.identityState!(b));
+  });
+
+  it("is unaffected by the recentOpenIssues set changing (unrelated issue opened/closed elsewhere)", () => {
     const a = baseState({ recentOpenIssues: [] });
     const b = baseState({ recentOpenIssues: [{ id: "issue_2", identifier: "ODIAA-2", title: "New issue" }] });
 
-    expect(issueTriagePolicy.identityState!(a)).not.toEqual(issueTriagePolicy.identityState!(b));
+    // recentOpenIssues is company-wide "other open issues right now", not
+    // intrinsic to this issue — every newly opened/closed issue elsewhere
+    // must not invalidate every backlog issue's identity hash.
+    expect(issueTriagePolicy.identityState!(a)).toEqual(issueTriagePolicy.identityState!(b));
   });
 
   it("changes when title or description changes", () => {
@@ -514,6 +529,42 @@ describe("issueTriagePolicy via runPolicy", () => {
     const priorStateHash = hashState(issueTriagePolicy.identityState!(state), config.redactionPatterns);
     const second = await runPolicy(
       { policy: issueTriagePolicy, state, config, companyId: "company_1", issueId: "issue_1", priorStateHash },
+      { client, db, apply: { log: vi.fn() }, suggest: { log: vi.fn() } },
+    );
+    expect(second).toEqual({ outcome: "skipped", reason: "pre-filter" });
+  });
+
+  it("still skips re-triage when an unrelated issue opens and changes the recentOpenIssues candidate set", async () => {
+    const client = fakeClient({ owner: ownerAnswer("agent_1", 0.9) });
+    const db = createFakeDb();
+    const config = configFor("shadow");
+    const stateBeforeUnrelatedIssue = baseState({ hasOwner: false, recentOpenIssues: [] });
+
+    const first = await runPolicy(
+      { policy: issueTriagePolicy, state: stateBeforeUnrelatedIssue, config, companyId: "company_1", issueId: "issue_1" },
+      { client, db, apply: { log: vi.fn() }, suggest: { log: vi.fn() } },
+    );
+    expect(first.outcome).toBe("observed");
+
+    const priorStateHash = hashState(issueTriagePolicy.identityState!(stateBeforeUnrelatedIssue), config.redactionPatterns);
+
+    // A backlog sweep now runs again after an unrelated issue was opened
+    // elsewhere in the company — nothing about *this* issue changed, but
+    // `recentOpenIssues` (the company-wide "other open issues" list) grew.
+    const stateAfterUnrelatedIssue = baseState({
+      hasOwner: false,
+      recentOpenIssues: [{ id: "issue_99", identifier: "ODIAA-99", title: "Unrelated new issue" }],
+    });
+
+    const second = await runPolicy(
+      {
+        policy: issueTriagePolicy,
+        state: stateAfterUnrelatedIssue,
+        config,
+        companyId: "company_1",
+        issueId: "issue_1",
+        priorStateHash,
+      },
       { client, db, apply: { log: vi.fn() }, suggest: { log: vi.fn() } },
     );
     expect(second).toEqual({ outcome: "skipped", reason: "pre-filter" });
