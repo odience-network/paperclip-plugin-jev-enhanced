@@ -46,9 +46,13 @@ async function loadConfig(ctx: PluginContext, companyId?: string): Promise<JevCo
 }
 
 /** `params.companyId` is the host-authorized scope the RPC bridge injects
- * alongside UI-supplied params (see `GetDataParams`); it is never something a
- * caller can override from `params`, so it's the only safe source of tenant
- * scope for a `ctx.data` handler. */
+ * over any UI-supplied value (see `GetDataParams`) for a company-scoped
+ * bridge call. The one exception: a call with no company scope at all —
+ * the host's `assertPluginBridgeScope` only lets an instance admin reach that
+ * path — leaves `params.companyId` untouched, so whatever the caller passed
+ * survives. That's accepted here, since only an instance admin (already
+ * broadly privileged) can trigger the unscoped path; it is not a tenant
+ * isolation gap for ordinary company members. */
 function requireCompanyId(params: Record<string, unknown>): string {
   const companyId = params.companyId;
   if (typeof companyId !== "string" || companyId.length === 0) {
@@ -114,7 +118,10 @@ const plugin = definePlugin({
     ctx.data.register("decisions-history", async (params) => {
       const companyId = requireCompanyId(params);
       const issueId = String(params.issueId ?? "");
-      const limit = typeof params.limit === "number" ? params.limit : undefined;
+      // `Number.isInteger` rejects `NaN` and fractional values before they reach
+      // `listDecisionHistory`'s `Math.min/max`, which pass `NaN`/non-integers
+      // straight through and break the SQL `LIMIT`.
+      const limit = Number.isInteger(params.limit) ? (params.limit as number) : undefined;
       return listDecisionHistory(ctx.db, companyId, issueId, limit);
     });
 
