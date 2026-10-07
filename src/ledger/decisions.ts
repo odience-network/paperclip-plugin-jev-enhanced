@@ -232,6 +232,33 @@ export async function listDecisionHistory(
   return rows.map(fromDbRow);
 }
 
+/** Hard ceiling on `listRecentDecisionsForPolicy`'s `limit`, mirroring
+ * `MAX_DECISION_HISTORY_LIMIT`. */
+const MAX_RECENT_DECISIONS_LIMIT = 100;
+
+/**
+ * Cross-issue feed of one policy's most recent decisions for a company —
+ * `getLatestDecision`/`listDecisionHistory` are both scoped to a single
+ * `issueId`, which doesn't fit a dashboard widget that needs to show recent
+ * `comment-triage` activity across every issue. Tenant-isolated the same way:
+ * `companyId` is always part of the `WHERE` clause.
+ */
+export async function listRecentDecisionsForPolicy(
+  db: LedgerDb,
+  companyId: string,
+  policy: string,
+  limit = 20,
+): Promise<DecisionRow[]> {
+  const boundedLimit = Math.max(1, Math.min(limit, MAX_RECENT_DECISIONS_LIMIT));
+  const rows = await db.query<DecisionDbRow>(
+    `SELECT * FROM ${tableName(db, "jev_decisions")}
+     WHERE company_id = $1 AND policy = $2
+     ORDER BY created_at DESC LIMIT $3`,
+    [companyId, policy, boundedLimit],
+  );
+  return rows.map(fromDbRow);
+}
+
 export interface PolicyAggregate {
   policy: string;
   companyId: string;
