@@ -7,16 +7,181 @@ import {
   type PluginApiRequestInput,
   type PluginApiResponse,
   type EnvSecretRefBinding,
+  type PluginPerformActionContext,
 } from "@paperclipai/plugin-sdk";
 import { AuthenticationError, PermissionDeniedError } from "@typesafe-ai/sdk";
-import { parseJevConfig, type JevConfig } from "./config.js";
+import { parseJevConfig, policyConfigFor, type JevConfig } from "./config.js";
 import { JevClient } from "./jev/client.js";
 import { createInMemoryJevCache } from "./jev/cache.js";
-import { createPluginStateBudgetStore } from "./jev/budget.js";
-import { acquireLease, getLatestDecision, listDecisionHistory, getPolicyAggregate } from "./ledger/index.js";
-import { policies, runPolicy } from "./policies/index.js";
+import { createPluginStateBudgetStore, BudgetExceededError } from "./jev/budget.js";
+import {
+  acquireLease,
+  getLatestDecision,
+  getLatestDecisionForPolicy,
+  listDecisionHistory,
+  getPolicyAggregate,
+  type DecisionRow,
+  type LedgerDb,
+} from "./ledger/index.js";
+import {
+  policies,
+  runPolicy,
+  issueTriagePolicy,
+  ISSUE_TYPE_CATALOG,
+  type IssueTriageState,
+  type RunPolicyResult,
+} from "./policies/index.js";
+import type { ApplyDeps } from "./apply/index.js";
+import type { SuggestDeps } from "./suggest/index.js";
 
 const jevCache = createInMemoryJevCache();
+
+/** This plugin's own `originKind` — `preFilter` uses it to never triage an
+ * issue the plugin itself created, matching `manifest.ts`'s `id`. */
+const PLUGIN_ORIGIN_KIND = "plugin:odience.jev";
+
+function buildApplyDeps(ctx: PluginContext): ApplyDeps {
+  return {
+    log: (message, fields) => ctx.logger.info(message, fields),
+    updateIssue: async ({ issueId, companyId, patch }) => {
+      await ctx.issues.update(issueId, patch, companyId);
+    },
+  };
+}
+
+function buildSuggestDeps(ctx: PluginContext): SuggestDeps {
+  return {
+    log: (message, fields) => ctx.logger.info(message, fields),
+    requestConfirmation: async ({ issueId, companyId, prompt, detailsMarkdown, idempotencyKey }) => {
+      await ctx.issues.requestConfirmation(
+        issueId,
+        {
+          resolverPolicy: "board_only",
+          continuationPolicy: "none",
+          idempotencyKey,
+          payload: { version: 1, prompt, detailsMarkdown, allowDeclineReason: false },
+        },
+        companyId,
+      );
+    },
+  };
+}
+
+function issueTriageFingerprintKey(companyId: string, issueId: string) {
+  return { scopeKind: "company" as const, scopeId: companyId, namespace: "issue-triage-fingerprint", stateKey: issueId };
+}
+
+function titleDescriptionFingerprint(title: string, description: string | null): string {
+  return `${title}\u0000${description ?? ""}`;
+}
+
+/**
+ * Builds the state `issue-triage` asks Jev about. Returns `null` when the
+ * issue can't be found (e.g. deleted between the event firing and the
+ * handler running) — callers treat that as nothing to do, not an error.
+ */
+async function buildIssueTriageState(
+  ctx: PluginContext,
+  companyId: string,
+  issueId: string,
+  priorDecision: DecisionRow | null,
+): Promise<IssueTriageState | null> {
+  const issue = await ctx.issues.get(issueId, companyId);
+  if (!issue) return null;
+
+  const hasProject = Boolean(issue.projectId);
+  const agents = await ctx.agents.list({ companyId });
+  const eligibleAgents = agents
+    .filter((agent) => agent.status !== "terminated" && agent.status !== "pending_approval")
+    .map((agent) => ({ id: agent.id, name: agent.name, role: agent.role }));
+
+  const candidateProjects = hasProject
+    ? []
+    : (await ctx.projects.list({ companyId })).map((project) => ({ id: project.id, name: project.name }));
+
+  const recentIssues = await ctx.issues.list({ companyId, limit: 25 });
+  const recentOpenIssues = recentIssues
+    .filter(
+      (candidate) =>
+        candidate.id !== issueId &&
+        candidate.status !== "done" &&
+        candidate.status !== "cancelled" &&
+        candidate.originKind !== PLUGIN_ORIGIN_KIND,
+    )
+    .slice(0, 20)
+    .map((candidate) => ({ id: candidate.id, identifier: candidate.identifier, title: candidate.title }));
+
+  return {
+    issueId,
+    title: issue.title,
+    description: issue.description,
+    priority: issue.priority,
+    hasOwner: Boolean(issue.assigneeAgentId || issue.assigneeUserId),
+    hasUserAssignee: Boolean(issue.assigneeUserId),
+    hasProject,
+    existingLabelNames: (issue.labels ?? []).map((label) => label.name),
+    existingLabelIds: issue.labelIds ?? [],
+    isFirstTriage: priorDecision === null,
+    isPluginOrigin: issue.originKind === PLUGIN_ORIGIN_KIND,
+    eligibleAgents,
+    candidateProjects,
+    recentOpenIssues,
+    issueTypes: ISSUE_TYPE_CATALOG,
+  };
+}
+
+/**
+ * Shared entry point for every `issue-triage` trigger (`issue.created`,
+ * `issue.updated`, the manual action, and the nightly sweep job). Records
+ * the issue's current title/description fingerprint on every run so
+ * `issue.updated`'s own handler can tell whether a later event actually
+ * changed title/description before re-triaging.
+ */
+async function triageIssue(
+  ctx: PluginContext,
+  companyId: string,
+  issueId: string,
+  options: { runId?: string | null; agentId?: string | null } = {},
+): Promise<RunPolicyResult | null> {
+  const config = await loadConfig(ctx, companyId);
+  const policyConfig = policyConfigFor(config, issueTriagePolicy.name);
+  if (!policyConfig.enabled) return null;
+
+  const priorDecision = await getLatestDecisionForPolicy(ctx.db as LedgerDb, companyId, issueId, issueTriagePolicy.name);
+  const state = await buildIssueTriageState(ctx, companyId, issueId, priorDecision);
+  if (!state) return null;
+
+  const client = buildClient(ctx, config);
+  const result = await runPolicy(
+    {
+      policy: issueTriagePolicy,
+      state,
+      config,
+      companyId,
+      issueId,
+      runId: options.runId ?? null,
+      agentId: options.agentId ?? null,
+      priorStateHash: priorDecision?.stateHash ?? null,
+    },
+    {
+      client,
+      db: ctx.db,
+      apply: buildApplyDeps(ctx),
+      suggest: buildSuggestDeps(ctx),
+    },
+  );
+
+  // Written only once `runPolicy` has resolved (skipped or completed), never
+  // before — `runPolicy` throws on a provider/apply error without recording
+  // this fingerprint, so an identical later `issue.updated` for the same
+  // title/description still retries instead of being silently skipped.
+  await ctx.state.set(
+    issueTriageFingerprintKey(companyId, issueId),
+    titleDescriptionFingerprint(state.title, state.description),
+  );
+
+  return result;
+}
 
 /** Lifecycle hooks other than `setup` receive no `ctx` argument, so `setup`
  * captures it here for `onApiRequest` (and any future out-of-band hook) to use. */
@@ -89,7 +254,8 @@ const plugin = definePlugin({
           {
             client,
             db: ctx.db,
-            apply: { log: (message, fields) => ctx.logger.info(message, fields) },
+            apply: buildApplyDeps(ctx),
+            suggest: buildSuggestDeps(ctx),
           },
         );
       } catch (error) {
@@ -97,6 +263,101 @@ const plugin = definePlugin({
           issueId,
           error: error instanceof Error ? error.message : String(error),
         });
+      }
+    });
+
+    ctx.events.on("issue.created", async (event) => {
+      const issueId = event.entityId;
+      if (!issueId) return;
+      const acquired = await acquireLease(ctx.state, `issue-triage:${event.eventId}`);
+      if (!acquired) {
+        ctx.logger.debug("jev.issue-triage.event.duplicate", { eventId: event.eventId });
+        return;
+      }
+      try {
+        await triageIssue(ctx, event.companyId, issueId);
+      } catch (error) {
+        ctx.logger.error("jev.issue-triage.run-failed", {
+          issueId,
+          trigger: "issue.created",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+
+    ctx.events.on("issue.updated", async (event) => {
+      const issueId = event.entityId;
+      if (!issueId) return;
+      const acquired = await acquireLease(ctx.state, `issue-triage:${event.eventId}`);
+      if (!acquired) {
+        ctx.logger.debug("jev.issue-triage.event.duplicate", { eventId: event.eventId });
+        return;
+      }
+      try {
+        // The event payload's `details` are ad hoc per call site, not a
+        // reliable field diff — so title/description changes are detected by
+        // comparing against a fingerprint this plugin maintains itself,
+        // which also keeps this handler from re-triggering on the plugin's
+        // own enforce-mode writes (which never touch title/description).
+        const issue = await ctx.issues.get(issueId, event.companyId);
+        if (!issue) return;
+        const fingerprint = titleDescriptionFingerprint(issue.title, issue.description);
+        const previous = await ctx.state.get(issueTriageFingerprintKey(event.companyId, issueId));
+        if (previous === fingerprint) return;
+        await triageIssue(ctx, event.companyId, issueId);
+      } catch (error) {
+        ctx.logger.error("jev.issue-triage.run-failed", {
+          issueId,
+          trigger: "issue.updated",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+
+    ctx.actions.register("triage-issue", async (params, context: PluginPerformActionContext) => {
+      const issueId = typeof params.issueId === "string" ? params.issueId : "";
+      const companyId = context.companyId;
+      if (!issueId || !companyId) {
+        throw new Error("issueId and an authorized companyId are required");
+      }
+      const result = await triageIssue(ctx, companyId, issueId, {
+        runId: context.actor.runId,
+        agentId: context.actor.agentId,
+      });
+      return result ?? { outcome: "skipped", reason: "policy-disabled-or-issue-not-found" };
+    });
+
+    ctx.jobs.register("issue-triage-backlog-sweep", async (job) => {
+      const companies = await ctx.companies.list();
+      for (const company of companies) {
+        const config = await loadConfig(ctx, company.id);
+        const policyConfig = policyConfigFor(config, issueTriagePolicy.name);
+        if (!policyConfig.enabled) continue;
+
+        const options = policyConfig.options as { maxBacklogSweepPerRun?: number };
+        const maxPerRun = typeof options.maxBacklogSweepPerRun === "number" ? options.maxBacklogSweepPerRun : 50;
+
+        const [backlog, todo] = await Promise.all([
+          ctx.issues.list({ companyId: company.id, status: "backlog", limit: maxPerRun }),
+          ctx.issues.list({ companyId: company.id, status: "todo", limit: maxPerRun }),
+        ]);
+        const candidates = [...backlog, ...todo].slice(0, maxPerRun);
+
+        for (const issue of candidates) {
+          try {
+            await triageIssue(ctx, company.id, issue.id, { runId: job.runId });
+          } catch (error) {
+            if (error instanceof BudgetExceededError) {
+              ctx.logger.info("jev.job.issue-triage-backlog-sweep.budget-exhausted", { companyId: company.id });
+              break;
+            }
+            ctx.logger.error("jev.job.issue-triage-backlog-sweep.failed", {
+              companyId: company.id,
+              issueId: issue.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
       }
     });
 
@@ -158,7 +419,8 @@ const plugin = definePlugin({
           {
             client,
             db: ctx.db,
-            apply: { log: (message, fields) => ctx.logger.info(message, fields) },
+            apply: buildApplyDeps(ctx),
+            suggest: buildSuggestDeps(ctx),
           },
         );
         return { content: JSON.stringify(result), data: result };

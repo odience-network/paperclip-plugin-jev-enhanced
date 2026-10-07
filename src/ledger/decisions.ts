@@ -188,6 +188,27 @@ export async function getLatestDecision(db: LedgerDb, companyId: string, issueId
   return rows[0] ? fromDbRow(rows[0]) : null;
 }
 
+/**
+ * Same tenant-isolation guarantee as `getLatestDecision`, additionally scoped
+ * to one `policy` name — needed once more than one policy can decide on the
+ * same issue, so one policy's idempotency check (comparing against its own
+ * last `stateHash`) never reads another policy's decision row.
+ */
+export async function getLatestDecisionForPolicy(
+  db: LedgerDb,
+  companyId: string,
+  issueId: string,
+  policy: string,
+): Promise<DecisionRow | null> {
+  const rows = await db.query<DecisionDbRow>(
+    `SELECT * FROM ${tableName(db, "jev_decisions")}
+     WHERE company_id = $1 AND issue_id = $2 AND policy = $3
+     ORDER BY created_at DESC LIMIT 1`,
+    [companyId, issueId, policy],
+  );
+  return rows[0] ? fromDbRow(rows[0]) : null;
+}
+
 export async function listDecisionHistory(
   db: LedgerDb,
   companyId: string,

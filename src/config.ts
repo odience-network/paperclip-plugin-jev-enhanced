@@ -22,6 +22,13 @@ const policyConfigSchema = z.object({
   enabled: z.boolean().default(true),
   mode: z.enum(POLICY_MODES).default("shadow"),
   thresholds: z.record(z.string(), z.number()).default({}),
+  /** Operator override: lets `enforce` mode overwrite a human-set field this
+   * policy would otherwise respect. Never lets any policy write
+   * `assigneeUserId` — that rule has no override. */
+  alwaysAuto: z.boolean().default(false),
+  /** Free-form per-policy settings bag (e.g. `issue-triage`'s issue-type ->
+   * label-id map) that don't belong in the shared schema above. */
+  options: z.record(z.string(), z.unknown()).default({}),
 });
 export type PolicyConfig = z.infer<typeof policyConfigSchema>;
 
@@ -40,7 +47,7 @@ export type JevConfig = z.infer<typeof jevConfigSchema>;
 /** Every policy ships in `shadow` mode until its eval report clears the bar
  * for `enforce` — this is the single place that default is encoded. */
 export function policyConfigFor(config: JevConfig, policyName: string): PolicyConfig {
-  return config.policies[policyName] ?? { enabled: true, mode: "shadow", thresholds: {} };
+  return config.policies[policyName] ?? { enabled: true, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {} };
 }
 
 export function parseJevConfig(raw: Record<string, unknown>): JevConfig {

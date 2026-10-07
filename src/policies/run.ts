@@ -4,6 +4,8 @@ import { classifyError } from "../jev/errors.js";
 import { beginDecision, completeDecision, type DecisionOutcome, type LedgerDb } from "../ledger/index.js";
 import { policyConfigFor, type JevConfig, type PolicyMode } from "../config.js";
 import { applyDecision, type ApplyDeps } from "../apply/index.js";
+import { postSuggestion, type SuggestDeps } from "../suggest/index.js";
+import { hashState } from "../jev/redact.js";
 import type { Policy, PolicyContext, PolicyVerdict } from "./types.js";
 
 export interface RunPolicyInput<TState> {
@@ -14,12 +16,17 @@ export interface RunPolicyInput<TState> {
   issueId?: string | null;
   runId?: string | null;
   agentId?: string | null;
+  /** The previous decision's `stateHash` for this issue (from the ledger),
+   * if the caller already looked one up. Threaded into `ctx.priorStateHash`
+   * so a policy's `preFilter` can skip re-asking Jev about unchanged state. */
+  priorStateHash?: string | null;
 }
 
 export interface RunPolicyDeps {
   client: JevClient;
   db: LedgerDb;
   apply: ApplyDeps;
+  suggest: SuggestDeps;
 }
 
 export type RunPolicyResult =
@@ -56,6 +63,13 @@ export async function runPolicy<TState>(
     runId: input.runId ?? null,
     agentId: input.agentId ?? null,
     config: policyConfig,
+    respectExistingFields: input.config.respectExistingFields,
+    alwaysAuto: policyConfig.alwaysAuto,
+    stateHash: hashState(
+      input.policy.identityState ? input.policy.identityState(input.state) : input.state,
+      input.config.redactionPatterns,
+    ),
+    priorStateHash: input.priorStateHash ?? null,
   };
 
   if (!policyConfig.enabled) {
@@ -86,11 +100,16 @@ export async function runPolicy<TState>(
       questions,
     });
     const answers = askOutcome.result.answers as Record<string, JevAnswer>;
-    const verdict = input.policy.decide(answers, ctx);
+    const verdict = input.policy.decide(answers, ctx, input.state);
     const outcome = outcomeForMode(policyConfig.mode);
 
     await completeDecision(deps.db, decisionId, {
-      stateHash: askOutcome.stateHash,
+      // The ledger persists the *identity* hash (`ctx.stateHash`), not
+      // `askOutcome.stateHash` (which hashes the full, noisy state sent to
+      // the provider and exists only to key the response cache) — this is
+      // the value `priorStateHash` compares against on the next run, so it
+      // must be the same stable projection `preFilter` used above.
+      stateHash: ctx.stateHash ?? askOutcome.stateHash,
       answers,
       confidence: verdict.confidence,
       margin: verdict.margin,
@@ -102,7 +121,9 @@ export async function runPolicy<TState>(
     });
 
     if (outcome === "applied") {
-      await applyDecision({ policy: input.policy.name, verdict, ctx }, deps.apply);
+      await applyDecision({ policy: input.policy.name, verdict, ctx, state: input.state }, deps.apply);
+    } else if (outcome === "suggested") {
+      await postSuggestion({ policy: input.policy.name, verdict, ctx }, deps.suggest);
     }
 
     return { outcome, decisionId, verdict, cached: askOutcome.cached };

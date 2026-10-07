@@ -2,3 +2,10 @@ dist
 node_modules
 .claude
 .serena
+
+# Real company issue/agent content for the issue-triage real-data eval row
+# (titles, descriptions, agent roster) must never land in this public repo —
+# see eval/generate-issue-triage-real-dataset.ts. Keep it local-only, or as a
+# Paperclip issue document; only aggregate metrics belong in eval/reports/.
+/eval/fixtures/issue-triage-real-snapshot.json
+/eval/datasets/issue-triage-real.jsonl

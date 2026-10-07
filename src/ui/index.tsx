@@ -39,38 +39,54 @@ type DecisionRow = {
 export function IssueDecisionsTab(_props: PluginWidgetProps) {
   const { entityId } = useHostContext();
   const { data, loading, error } = usePluginData<DecisionRow[]>("decisions-history", { issueId: entityId });
+  const triageIssue = usePluginAction("triage-issue");
 
   if (!entityId) return <div>No issue selected.</div>;
   if (loading) return <div>Loading Jev decisions...</div>;
   if (error) return <div>Plugin error: {error.message}</div>;
-  if (!data || data.length === 0) return <div>No Jev decisions recorded for this issue yet.</div>;
+
+  const triageButton = (
+    <button onClick={() => void triageIssue({ issueId: entityId })}>Triage now</button>
+  );
+
+  if (!data || data.length === 0) {
+    return (
+      <div style={{ display: "grid", gap: "0.5rem" }}>
+        <div>No Jev decisions recorded for this issue yet.</div>
+        {triageButton}
+      </div>
+    );
+  }
 
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse" }}>
-      <thead>
-        <tr>
-          <th style={{ textAlign: "left" }}>Policy</th>
-          <th style={{ textAlign: "left" }}>Mode</th>
-          <th style={{ textAlign: "left" }}>Outcome</th>
-          <th style={{ textAlign: "left" }}>Confidence</th>
-          <th style={{ textAlign: "left" }}>Cost (USD)</th>
-          <th style={{ textAlign: "left" }}>Reason</th>
-          <th style={{ textAlign: "left" }}>When</th>
-        </tr>
-      </thead>
-      <tbody>
-        {data.map((row) => (
-          <tr key={row.id}>
-            <td>{row.policy}</td>
-            <td>{row.mode}</td>
-            <td>{row.outcome}</td>
-            <td>{row.confidence?.toFixed(2) ?? "-"}</td>
-            <td>{row.costUsd.toFixed(4)}</td>
-            <td>{row.reason ?? "-"}</td>
-            <td>{new Date(row.createdAt).toLocaleString()}</td>
+    <div style={{ display: "grid", gap: "0.5rem" }}>
+      {triageButton}
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ textAlign: "left" }}>Policy</th>
+            <th style={{ textAlign: "left" }}>Mode</th>
+            <th style={{ textAlign: "left" }}>Outcome</th>
+            <th style={{ textAlign: "left" }}>Confidence</th>
+            <th style={{ textAlign: "left" }}>Cost (USD)</th>
+            <th style={{ textAlign: "left" }}>Reason</th>
+            <th style={{ textAlign: "left" }}>When</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {data.map((row) => (
+            <tr key={row.id}>
+              <td>{row.policy}</td>
+              <td>{row.mode}</td>
+              <td>{row.outcome}</td>
+              <td>{row.confidence?.toFixed(2) ?? "-"}</td>
+              <td>{row.costUsd.toFixed(4)}</td>
+              <td>{row.reason ?? "-"}</td>
+              <td>{new Date(row.createdAt).toLocaleString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

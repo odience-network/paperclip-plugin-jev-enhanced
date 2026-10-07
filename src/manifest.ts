@@ -24,8 +24,15 @@ const manifest: PaperclipPluginManifestV1 = {
     "jobs.schedule",
     "ui.dashboardWidget.register",
     "ui.detailTab.register",
+    "ui.action.register",
     "metrics.write",
     "telemetry.track",
+    "companies.read",
+    "projects.read",
+    "issues.read",
+    "agents.read",
+    "issues.update",
+    "issue.interactions.create",
   ],
   entrypoints: {
     worker: "./dist/worker.js",
@@ -82,9 +89,23 @@ const manifest: PaperclipPluginManifestV1 = {
             enabled: { type: "boolean", default: true },
             mode: { type: "string", enum: ["shadow", "suggest", "enforce"], default: "shadow" },
             thresholds: { type: "object", additionalProperties: { type: "number" } },
+            alwaysAuto: {
+              type: "boolean",
+              default: false,
+              description:
+                "When true, this policy may apply fields even over a human-set value. Never applies to " +
+                "assigneeUserId, which Jev can never set regardless of this flag.",
+            },
+            options: {
+              type: "object",
+              additionalProperties: true,
+              description:
+                "Policy-specific options, e.g. issue-triage's issueTypeLabelIds (maps issue type answers to " +
+                "label ids) and maxBacklogSweepPerRun (caps issues swept per nightly run, per company).",
+            },
           },
         },
-        description: "Per-policy enablement, mode, and thresholds. New policies default to shadow mode.",
+        description: "Per-policy enablement, mode, thresholds, and options. New policies default to shadow mode.",
       },
       redactionPatterns: {
         type: "array",
@@ -115,6 +136,14 @@ const manifest: PaperclipPluginManifestV1 = {
       displayName: "Daily Jev Budget Report",
       description: "Logs the previous UTC day's token and cost usage per company for observability.",
       schedule: "5 0 * * *",
+    },
+    {
+      jobKey: "issue-triage-backlog-sweep",
+      displayName: "Issue Triage Backlog Sweep",
+      description:
+        "Nightly re-triage of backlog/todo issues that have never been triaged or whose state changed since " +
+        "their last triage, capped per company by maxBacklogSweepPerRun and the daily token budget.",
+      schedule: "30 3 * * *",
     },
   ],
   tools: [

@@ -23,8 +23,11 @@ function parseArgs(argv: string[]): { policy: string; dataset?: string } {
 
 function decideAll(policy: Policy, cases: EvalCase[], thresholds: Record<string, number>): EvalResult[] {
   return cases.map((evalCase) => {
-    const ctx: PolicyContext = { companyId: "eval", config: { enabled: true, mode: "shadow", thresholds } };
-    const verdict = policy.decide(evalCase.recordedAnswers, ctx);
+    const ctx: PolicyContext = {
+      companyId: "eval",
+      config: { enabled: true, mode: "shadow", thresholds, alwaysAuto: false, options: {} },
+    };
+    const verdict = policy.decide(evalCase.recordedAnswers, ctx, evalCase.state);
     return {
       id: evalCase.id,
       predictedVerdict: verdict.verdict,

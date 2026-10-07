@@ -42,24 +42,52 @@ src/
                       with TTL.
   policies/
     types.ts            `Policy<TState>` contract: `preFilter`, `questions`,
-                      `decide`, `mode`, thresholds.
+                      `decide(answers, ctx, state?)`, `mode`, thresholds. The
+                      optional `state` param lets `decide()` gate on
+                      candidate-set size (see `issue-triage`'s `maxCandidates`).
     ping.ts             Reference policy: trivial question/threshold/verdict
                       example used by tests, the eval skeleton, and the
                       `jev-ping` tool.
+    issue-triage.ts     `issue-triage` policy: routes a new/updated issue to
+                      an owner, priority, issue type, etc. See "Policies >
+                      issue-triage" below for the full field mapping.
     run.ts              `runPolicy()`: orchestrates one policy evaluation —
                       pre-filter, ledger-write-before-call, ask, decide,
-                      ledger-complete, conditional apply.
+                      ledger-complete, conditional apply/suggest.
     index.ts            Policy registry (`policies[name]`).
   apply/
     index.ts            Side-effecting handlers invoked only when a policy's
                       mode is `enforce`. Never called in `shadow`/`suggest`.
+  suggest/
+    index.ts            Posts a `request_confirmation` issue-thread
+                      interaction when a policy's mode is `suggest`. Never
+                      called in `shadow`/`enforce`.
   ui/
     index.tsx           `DashboardWidget` (health widget) and
-                      `IssueDecisionsTab` (per-issue decision history).
+                      `IssueDecisionsTab` (per-issue decision history, plus a
+                      "Triage now" button wired to the `triage-issue` action).
 eval/
   types.ts, dataset.ts, metrics.ts, run.ts, fixtures/
                         Recorded-fixture eval runner (`pnpm eval --policy
                       <name>`); never calls the network or JevClient.
+  datasets/             Larger labelled datasets (not just CI fixtures), e.g.
+                      `issue-triage.jsonl` (60 rows), used by the dedicated
+                      report scripts below rather than the CI smoke eval.
+  generate-issue-triage-dataset.ts
+                        Generates `datasets/issue-triage.jsonl` and a 10-row
+                      subset at `fixtures/issue-triage.jsonl`. Synthetic —
+                      see the generated report's "Scope note" for why.
+  report-issue-triage.ts
+                        Dedicated eval report for `issue-triage`: sweeps its
+                      actual threshold keys (`confidenceMin`/`marginMin`,
+                      not per-answer-key names like `eval/run.ts`'s generic
+                      sweep), and writes `reports/issue-triage.md`.
+  reports/
+    issue-triage.md     Generated eval report (accuracy, agreement, ECE,
+                      threshold sweep, cost/latency, suggest-mode threshold
+                      recommendation). Regenerate with `tsx
+                      eval/report-issue-triage.ts` after changing the dataset
+                      or the policy's `decide()`.
 migrations/
   001_jev_tables.sql    `jev_decisions` / `jev_feedback` DDL.
 ```
@@ -146,7 +174,9 @@ Company-scoped, validated by `src/config.ts` (`parseJevConfig`):
 | `baseUrl` | TypeSafe default | Override for gateways/proxies |
 | `timeoutMs` | `10000` | Per-attempt timeout |
 | `dailyTokenBudget` | `5,000,000` | Tokens/company/day across all policies |
-| `policies.<name>` | `{enabled: true, mode: "shadow", thresholds: {}}` | Per-policy |
+| `policies.<name>` | `{enabled: true, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {}}` | Per-policy |
+| `policies.<name>.alwaysAuto` | `false` | Lets this policy apply fields over a human-set value. Never applies to `assigneeUserId`, which Jev can never set regardless of this flag. |
+| `policies.<name>.options` | `{}` | Policy-specific bag, e.g. `issue-triage`'s `issueTypeLabelIds`/`maxBacklogSweepPerRun` (see "Policies > issue-triage" below) |
 | `redactionPatterns` | `[]` | Regexes replaced with `[REDACTED]` before sending |
 | `respectExistingFields` | `true` | Jev never overwrites a human-set field unless this is explicitly disabled |
 
@@ -175,13 +205,15 @@ something the code enforces automatically.
 
 A `Policy<TState>` (`src/policies/types.ts`) declares `preFilter(state, ctx)`,
 `questions(state, ctx)` (the `typesafe_ask` questions to pose), and
-`decide(answers, ctx)` (maps answers + configured thresholds to a verdict).
-`runPolicy()` (`src/policies/run.ts`) is the only orchestrator: it resolves
-per-policy config, pre-filters, writes the pending ledger row, calls
-`JevClient.ask()`, decides, completes the ledger row, and — only when the
-resolved mode is `enforce` — calls `applyDecision()` (`src/apply/index.ts`).
-`apply/` handlers are the sole place side effects happen; `shadow` and
-`suggest` modes never touch `apply/`.
+`decide(answers, ctx, state?)` (maps answers + configured thresholds,
+optionally gated by the original `state`, to a verdict with a per-field
+`fields: FieldDecision[]` breakdown). `runPolicy()` (`src/policies/run.ts`)
+is the only orchestrator: it resolves per-policy config, pre-filters, writes
+the pending ledger row, calls `JevClient.ask()`, decides, completes the
+ledger row, and then — depending on the resolved mode — either calls
+`applyDecision()` (`src/apply/index.ts`, `enforce` only) or
+`suggestDecision()` (`src/suggest/index.ts`, `suggest` only). `shadow` mode
+calls neither; ledger write is the only effect.
 
 `ping` (`src/policies/ping.ts`) is the trivial reference implementation used
 by tests, the eval fixtures, and the `jev-ping` tool
@@ -189,10 +221,63 @@ by tests, the eval fixtures, and the `jev-ping` tool
 exercising the full pipeline end to end.
 
 `respectExistingFields` and the hard rule that Jev never overrides a
-human-set `assigneeUserId` (even under `always_auto`) are policy-author
-responsibilities enforced by convention and code review in `apply/` handlers,
-not by a generic framework guard — each `apply` handler is small and
-reviewable specifically because of this.
+human-set `assigneeUserId` (even under `alwaysAuto`) are policy-author
+responsibilities enforced by convention and code review in `apply/`/`decide()`
+implementations, not by a generic framework guard — each `apply` handler and
+each policy's `decide()` is small and reviewable specifically because of
+this.
+
+### Policies > `issue-triage`
+
+`src/policies/issue-triage.ts`. Triggered by `issue.created`, `issue.updated`
+(only when title/description changed — see `titleDescriptionFingerprint` in
+`worker.ts`), the `triage-issue` manual UI action (`IssueDecisionsTab`'s
+"Triage now" button), and the nightly `issue-triage-backlog-sweep` job
+(throttled by `options.maxBacklogSweepPerRun` and the daily token budget).
+
+One `typesafe_ask` call per issue, with these questions:
+
+| Question | Type | Maps to |
+|---|---|---|
+| `owner` | choice (eligible agents + `unassigned` + `needs_triage`) | `assigneeAgentId` (never `assigneeUserId`) |
+| `priority` | choice (`critical`/`high`/`medium`/`low`) | `priority` |
+| `issueType` | choice (`ISSUE_TYPE_CATALOG`) | `issueType`, only if `options.issueTypeLabelIds` maps the chosen value to a real label id — otherwise always `observe` |
+| `complexity` | score (0–3) | observe-only, no issue field |
+| `needsMoreContext` | noul | observe-only |
+| `likelyBlocked` | noul | observe-only |
+| `duplicateExists` / `duplicateOf` | noul / choice over recent open issue ids + `none` | observe-only |
+| `fitsProject:<id>` | noul, one per candidate project, only asked when `!state.hasProject` | observe-only |
+
+`decide()` only ever reaches `apply`/`suggest` for `owner` (and `priority`,
+`issueType` under the same confidence/margin/state-size gate); every other
+question is always `action: "observe"` — recorded in the ledger for future
+analysis, never applied. The gate: `confidence >= thresholds.confidenceMin`
+(default `0.7`) **and** `margin >= thresholds.marginMin` (default `0.15`)
+**and** the candidate-set size (max of eligible agents/projects/recent
+issues) `< thresholds.maxCandidates` (default `20`); otherwise the field is
+`observe` regardless of mode.
+
+`preFilter` skips: issues the plugin itself created (`isPluginOrigin`);
+re-triage where the computed state hash matches the prior decision's hash
+(no-op re-ask); and — unless `alwaysAuto` or `respectExistingFields: false`
+— issues that already have both an owner and a project and aren't their
+first-ever triage (nothing left a human hasn't already decided). A fresh
+issue's very first triage is never skipped by the last rule, since no human
+has reviewed its default fields yet.
+
+Mode semantics for `owner`/`priority`/`issueType` once the gate clears:
+- **shadow**: ledger row only, `outcome: "observed"`.
+- **suggest**: posts one `request_confirmation` issue-thread interaction
+  (`src/suggest/index.ts`) listing the proposed fields; never calls
+  `ctx.issues.update`.
+- **enforce**: patches the field via `ctx.issues.update`
+  (`src/apply/index.ts`) — but only if the field isn't already human-set, or
+  `alwaysAuto` is on for this policy. `assigneeUserId` is never a key Jev can
+  write, in any mode, regardless of `alwaysAuto`.
+
+See `eval/reports/issue-triage.md` for the current accuracy/agreement/ECE/
+threshold-sweep numbers and the recommended `suggest`-mode thresholds (from a
+synthetic dataset — see that report's "Scope note").
 
 ## Eval runner
 
@@ -206,6 +291,13 @@ latency/cost, and a threshold sweep (re-running `decide()` at a range of
 threshold values keyed by whatever answer keys appear in the dataset). This
 is what CI's "smoke eval" step runs, and what gates a policy's promotion from
 `shadow` to `enforce`.
+
+`eval/run.ts`'s generic sweep assumes threshold keys match answer-key names
+(true for `ping`'s `pong`). Policies with differently-named thresholds — like
+`issue-triage`'s `confidenceMin`/`marginMin`/`maxCandidates` — need a
+dedicated report script instead (`eval/report-issue-triage.ts` is the
+pattern to copy for a future policy in this situation); `eval/run.ts` itself
+is left generic rather than special-cased per policy.
 
 ## Deployment
 

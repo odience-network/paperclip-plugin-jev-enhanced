@@ -44,20 +44,29 @@ function baseConfig(overrides: Partial<JevConfig> = {}): JevConfig {
 
 describe("pingPolicy", () => {
   it("pre-filters out an empty message", () => {
-    const ctx = { companyId: "company_1", config: { enabled: true, mode: "shadow" as const, thresholds: {} } };
+    const ctx = {
+      companyId: "company_1",
+      config: { enabled: true, mode: "shadow" as const, thresholds: {}, alwaysAuto: false, options: {} },
+    };
     expect(pingPolicy.preFilter({ message: "" }, ctx)).toBe(false);
     expect(pingPolicy.preFilter({ message: "ping" }, ctx)).toBe(true);
   });
 
   it("decides pong when the noul probability clears the threshold", () => {
-    const ctx = { companyId: "company_1", config: { enabled: true, mode: "shadow" as const, thresholds: { pong: 0.6 } } };
+    const ctx = {
+      companyId: "company_1",
+      config: { enabled: true, mode: "shadow" as const, thresholds: { pong: 0.6 }, alwaysAuto: false, options: {} },
+    };
     const verdict = pingPolicy.decide({ pong: { type: "noul", noul: 0.9 } }, ctx);
     expect(verdict.verdict).toBe("pong");
     expect(verdict.confidence).toBe(0.9);
   });
 
   it("decides no-pong when the noul probability misses the threshold", () => {
-    const ctx = { companyId: "company_1", config: { enabled: true, mode: "shadow" as const, thresholds: { pong: 0.6 } } };
+    const ctx = {
+      companyId: "company_1",
+      config: { enabled: true, mode: "shadow" as const, thresholds: { pong: 0.6 }, alwaysAuto: false, options: {} },
+    };
     const verdict = pingPolicy.decide({ pong: { type: "noul", noul: 0.4 } }, ctx);
     expect(verdict.verdict).toBe("no-pong");
   });
@@ -84,7 +93,7 @@ describe("runPolicy", () => {
         companyId: "company_1",
         issueId: "issue_1",
       },
-      { client, db, apply: { log: applyLog } },
+      { client, db, apply: { log: applyLog }, suggest: { log: vi.fn() } },
     );
 
     expect(result).toMatchObject({ outcome: "observed" });
@@ -103,11 +112,13 @@ describe("runPolicy", () => {
       {
         policy: pingPolicy,
         state: { message: "ping" },
-        config: baseConfig({ policies: { ping: { enabled: false, mode: "shadow", thresholds: {} } } }),
+        config: baseConfig({
+          policies: { ping: { enabled: false, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {} } },
+        }),
         companyId: "company_1",
         issueId: "issue_1",
       },
-      { client, db, apply: { log: vi.fn() } },
+      { client, db, apply: { log: vi.fn() }, suggest: { log: vi.fn() } },
     );
 
     expect(result).toEqual({ outcome: "skipped", reason: "policy-disabled" });
@@ -130,11 +141,13 @@ describe("runPolicy", () => {
       {
         policy: pingPolicy,
         state: { message: "ping" },
-        config: baseConfig({ policies: { ping: { enabled: true, mode: "enforce", thresholds: {} } } }),
+        config: baseConfig({
+          policies: { ping: { enabled: true, mode: "enforce", thresholds: {}, alwaysAuto: false, options: {} } },
+        }),
         companyId: "company_1",
         issueId: "issue_1",
       },
-      { client, db, apply: { log: applyLog } },
+      { client, db, apply: { log: applyLog }, suggest: { log: vi.fn() } },
     );
 
     expect(result).toMatchObject({ outcome: "applied" });
@@ -159,7 +172,7 @@ describe("runPolicy", () => {
           companyId: "company_1",
           issueId: "issue_1",
         },
-        { client, db, apply: { log: vi.fn() } },
+        { client, db, apply: { log: vi.fn() }, suggest: { log: vi.fn() } },
       ),
     ).rejects.toThrow();
   });
