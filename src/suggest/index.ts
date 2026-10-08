@@ -74,9 +74,22 @@ async function suggestIssueTriage(input: SuggestInput, deps: SuggestDeps): Promi
   deps.log("jev.suggest.issue-triage", { issueId, fieldCount: fields.length });
 }
 
+/** `ask`/`classify-task`/`verify`/`rerank` have no `issueId` in general (a
+ * direct tool/route call, not an issue-triggered event) and nothing to post
+ * a confirmation card about — this log-only handler exists so an operator
+ * who sets one of these policies to `suggest` by mistake gets a clear log
+ * line instead of falling through to `jev.suggest.missing-handler`. */
+async function suggestObserveOnly(input: SuggestInput, deps: SuggestDeps): Promise<void> {
+  deps.log(`jev.suggest.${input.policy}.no-op`, { reason: "observe-only-policy" });
+}
+
 export const suggestHandlers: Record<string, SuggestFn> = {
   ping: suggestPing,
   "issue-triage": suggestIssueTriage,
+  ask: suggestObserveOnly,
+  "classify-task": suggestObserveOnly,
+  verify: suggestObserveOnly,
+  rerank: suggestObserveOnly,
 };
 
 export async function postSuggestion(input: SuggestInput, deps: SuggestDeps): Promise<void> {

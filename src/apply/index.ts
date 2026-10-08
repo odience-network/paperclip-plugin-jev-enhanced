@@ -82,9 +82,21 @@ async function applyIssueTriage(input: ApplyInput, deps: ApplyDeps): Promise<voi
   deps.log("jev.apply.issue-triage", { issueId, patch: Object.keys(patch) });
 }
 
+/** `ask`/`classify-task`/`verify`/`rerank` never mark a field `"apply"` —
+ * these log-only handlers exist so an operator who sets one of these
+ * policies to `enforce` by mistake gets a clear log line instead of falling
+ * through to `jev.apply.missing-handler`. */
+async function applyObserveOnly(input: ApplyInput, deps: ApplyDeps): Promise<void> {
+  deps.log(`jev.apply.${input.policy}.no-op`, { reason: "observe-only-policy" });
+}
+
 export const applyHandlers: Record<string, ApplyFn> = {
   ping: applyPing,
   "issue-triage": applyIssueTriage,
+  ask: applyObserveOnly,
+  "classify-task": applyObserveOnly,
+  verify: applyObserveOnly,
+  rerank: applyObserveOnly,
 };
 
 export async function applyDecision(input: ApplyInput, deps: ApplyDeps): Promise<void> {

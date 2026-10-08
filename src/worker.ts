@@ -9,9 +9,11 @@ import {
   type EnvSecretRefBinding,
   type PluginPerformActionContext,
 } from "@paperclipai/plugin-sdk";
-import { AuthenticationError, PermissionDeniedError } from "@typesafe-ai/sdk";
+import { AuthenticationError, PermissionDeniedError, type Questions } from "@typesafe-ai/sdk";
+import type { z } from "zod";
+import manifest from "./manifest.js";
 import { parseJevConfig, policyConfigFor, type JevConfig } from "./config.js";
-import { JevClient } from "./jev/client.js";
+import { JevClient, MissingApiKeyError } from "./jev/client.js";
 import { createInMemoryJevCache } from "./jev/cache.js";
 import { createPluginStateBudgetStore, BudgetExceededError } from "./jev/budget.js";
 import {
@@ -30,9 +32,21 @@ import {
   ISSUE_TYPE_CATALOG,
   type IssueTriageState,
   type RunPolicyResult,
+  type Policy,
 } from "./policies/index.js";
 import type { ApplyDeps } from "./apply/index.js";
 import type { SuggestDeps } from "./suggest/index.js";
+import { runDecisionTool, statusForToolError } from "./tools/runTool.js";
+import {
+  jevAskParamsSchema,
+  jevClassifyTaskParamsSchema,
+  jevVerifyParamsSchema,
+  jevRerankParamsSchema,
+  type JevAskParams,
+  type JevClassifyTaskParams,
+  type JevVerifyParams,
+  type JevRerankParams,
+} from "./tools/schemas.js";
 
 const jevCache = createInMemoryJevCache();
 
@@ -191,7 +205,7 @@ function buildClient(ctx: PluginContext, config: JevConfig): JevClient {
   return new JevClient({
     resolveApiKey: async () => {
       if (!config.apiKeyRef) {
-        throw new Error("No TypeSafe API key bound. Bind a vault secret to apiKeyRef.");
+        throw new MissingApiKeyError();
       }
       return ctx.secrets.resolve(config.apiKeyRef as string | EnvSecretRefBinding);
     },
@@ -208,6 +222,69 @@ function buildClient(ctx: PluginContext, config: JevConfig): JevClient {
 
 async function loadConfig(ctx: PluginContext, companyId?: string): Promise<JevConfig> {
   return parseJevConfig(await ctx.config.get(companyId));
+}
+
+/** Query params the host parses as repeated keys arrive as `string[]` — API
+ * routes here only ever want the first value. */
+function firstQueryValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/** Looks up a tool's `parametersSchema` from `manifest.ts` instead of
+ * duplicating the JSON Schema literal at the registration call site — the
+ * manifest declaration is what agents and docs tooling see, so this keeps
+ * `ctx.tools.register` from drifting out of sync with it. */
+function toolSchema(name: string) {
+  const declaration = manifest.tools?.find((tool) => tool.name === name);
+  if (!declaration) throw new Error(`No manifest tool declaration for "${name}"`);
+  return declaration.parametersSchema;
+}
+
+function toAskState(params: JevAskParams) {
+  return { state: params.state, questions: params.questions as unknown as Questions };
+}
+
+function toClassifyTaskState(params: JevClassifyTaskParams) {
+  return { description: params.description, candidateSkills: params.candidateSkills ?? [] };
+}
+
+function toVerifyState(params: JevVerifyParams) {
+  return { claim: params.claim, evidence: params.evidence };
+}
+
+function toRerankState(params: JevRerankParams) {
+  return { query: params.query, candidates: params.candidates };
+}
+
+/** Shared by every `jev:*` tool handler and `tool-*` API route: resolves
+ * this company's config/client, runs `rawParams` through `runDecisionTool`,
+ * and never throws — callers map the resulting `ToolOutcome` to a
+ * `ToolResult` or `PluginApiResponse` themselves. */
+async function runJevTool<TParams, TState>(
+  ctx: PluginContext,
+  companyId: string,
+  policy: Policy<TState>,
+  paramsSchema: z.ZodType<TParams>,
+  toState: (params: TParams) => TState,
+  rawParams: unknown,
+  actor: { runId?: string | null; agentId?: string | null } = {},
+) {
+  const config = await loadConfig(ctx, companyId);
+  const client = buildClient(ctx, config);
+  return runDecisionTool(
+    {
+      rawParams,
+      paramsSchema,
+      toState,
+      policy,
+      config,
+      companyId,
+      issueId: (params) => (params as { issueId?: string }).issueId,
+      runId: actor.runId,
+      agentId: actor.agentId,
+    },
+    { client, db: ctx.db, apply: buildApplyDeps(ctx), suggest: buildSuggestDeps(ctx) },
+  );
 }
 
 /** `params.companyId` is the host-authorized scope the RPC bridge injects
@@ -426,6 +503,85 @@ const plugin = definePlugin({
         return { content: JSON.stringify(result), data: result };
       },
     );
+
+    ctx.tools.register(
+      "jev-ask",
+      {
+        displayName: "Jev Ask",
+        description: "Generic noul/choice/score question-asking tool for TypeSafe's Jev decision model.",
+        parametersSchema: toolSchema("jev-ask"),
+      },
+      async (params, runCtx) => {
+        const outcome = await runJevTool(ctx, runCtx.companyId, policies.ask, jevAskParamsSchema, toAskState, params, {
+          runId: runCtx.runId,
+          agentId: runCtx.agentId,
+        });
+        return outcome.ok ? { content: JSON.stringify(outcome.result), data: outcome.result } : { error: outcome.error };
+      },
+    );
+
+    ctx.tools.register(
+      "jev-classify-task",
+      {
+        displayName: "Jev Classify Task",
+        description: "Classifies a unit of work by kind, model tier, and review depth.",
+        parametersSchema: toolSchema("jev-classify-task"),
+      },
+      async (params, runCtx) => {
+        const outcome = await runJevTool(
+          ctx,
+          runCtx.companyId,
+          policies["classify-task"],
+          jevClassifyTaskParamsSchema,
+          toClassifyTaskState,
+          params,
+          { runId: runCtx.runId, agentId: runCtx.agentId },
+        );
+        return outcome.ok ? { content: JSON.stringify(outcome.result), data: outcome.result } : { error: outcome.error };
+      },
+    );
+
+    ctx.tools.register(
+      "jev-verify",
+      {
+        displayName: "Jev Verify",
+        description: "Checks whether evidence supports, contradicts, or says nothing about a claim.",
+        parametersSchema: toolSchema("jev-verify"),
+      },
+      async (params, runCtx) => {
+        const outcome = await runJevTool(
+          ctx,
+          runCtx.companyId,
+          policies.verify,
+          jevVerifyParamsSchema,
+          toVerifyState,
+          params,
+          { runId: runCtx.runId, agentId: runCtx.agentId },
+        );
+        return outcome.ok ? { content: JSON.stringify(outcome.result), data: outcome.result } : { error: outcome.error };
+      },
+    );
+
+    ctx.tools.register(
+      "jev-rerank",
+      {
+        displayName: "Jev Rerank",
+        description: "Scores candidates against a query for relevance, answer-containment, and injection risk.",
+        parametersSchema: toolSchema("jev-rerank"),
+      },
+      async (params, runCtx) => {
+        const outcome = await runJevTool(
+          ctx,
+          runCtx.companyId,
+          policies.rerank,
+          jevRerankParamsSchema,
+          toRerankState,
+          params,
+          { runId: runCtx.runId, agentId: runCtx.agentId },
+        );
+        return outcome.ok ? { content: JSON.stringify(outcome.result), data: outcome.result } : { error: outcome.error };
+      },
+    );
   },
 
   async onHealth(): Promise<PluginHealthDiagnostics> {
@@ -509,11 +665,69 @@ const plugin = definePlugin({
         return { status: 200, body: await getLatestDecision(ctx.db, input.companyId, input.params.issueId) };
       case "decision-history":
         return { status: 200, body: await listDecisionHistory(ctx.db, input.companyId, input.params.issueId) };
+      case "decisions-by-query": {
+        const issueId = firstQueryValue(input.query.issueId);
+        if (!issueId) return { status: 400, body: { error: "issueId query param is required" } };
+        const limitValue = firstQueryValue(input.query.limit);
+        const limit = limitValue !== undefined && Number.isInteger(Number(limitValue)) ? Number(limitValue) : undefined;
+        return { status: 200, body: await listDecisionHistory(ctx.db, input.companyId, issueId, limit) };
+      }
       case "policy-aggregate":
         return {
           status: 200,
           body: await getPolicyAggregate(ctx.db, input.companyId, input.params.policy),
         };
+      case "tool-ask": {
+        const outcome = await runJevTool(ctx, input.companyId, policies.ask, jevAskParamsSchema, toAskState, input.body, {
+          runId: input.actor.runId,
+          agentId: input.actor.agentId,
+        });
+        return outcome.ok
+          ? { status: 200, body: outcome.result }
+          : { status: statusForToolError(outcome.error), body: { error: outcome.error } };
+      }
+      case "tool-classify-task": {
+        const outcome = await runJevTool(
+          ctx,
+          input.companyId,
+          policies["classify-task"],
+          jevClassifyTaskParamsSchema,
+          toClassifyTaskState,
+          input.body,
+          { runId: input.actor.runId, agentId: input.actor.agentId },
+        );
+        return outcome.ok
+          ? { status: 200, body: outcome.result }
+          : { status: statusForToolError(outcome.error), body: { error: outcome.error } };
+      }
+      case "tool-verify": {
+        const outcome = await runJevTool(
+          ctx,
+          input.companyId,
+          policies.verify,
+          jevVerifyParamsSchema,
+          toVerifyState,
+          input.body,
+          { runId: input.actor.runId, agentId: input.actor.agentId },
+        );
+        return outcome.ok
+          ? { status: 200, body: outcome.result }
+          : { status: statusForToolError(outcome.error), body: { error: outcome.error } };
+      }
+      case "tool-rerank": {
+        const outcome = await runJevTool(
+          ctx,
+          input.companyId,
+          policies.rerank,
+          jevRerankParamsSchema,
+          toRerankState,
+          input.body,
+          { runId: input.actor.runId, agentId: input.actor.agentId },
+        );
+        return outcome.ok
+          ? { status: 200, body: outcome.result }
+          : { status: statusForToolError(outcome.error), body: { error: outcome.error } };
+      }
       default:
         return { status: 404, body: { error: `unknown route: ${input.routeKey}` } };
     }
