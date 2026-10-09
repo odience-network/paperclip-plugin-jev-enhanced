@@ -8,7 +8,7 @@ import {
 import type { PolicyContext } from "../src/policies/types.js";
 
 function ctx(thresholds: Record<string, number> = {}): PolicyContext {
-  return { companyId: "company_1", config: { enabled: true, mode: "shadow", thresholds } };
+  return { companyId: "company_1", config: { enabled: true, mode: "shadow", thresholds, alwaysAuto: false, options: {} } };
 }
 
 describe("browserActionPolicy action space", () => {

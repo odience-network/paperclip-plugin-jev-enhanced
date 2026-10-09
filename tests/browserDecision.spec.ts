@@ -117,7 +117,9 @@ describe("decideBrowserAction input validation", () => {
       {
         client,
         db: createFakeDb(),
-        config: baseConfig({ policies: { "browser-action": { enabled: false, mode: "shadow", thresholds: {} } } }),
+        config: baseConfig({
+          policies: { "browser-action": { enabled: false, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {} } },
+        }),
         companyId: "company_1",
         log: vi.fn(),
       },
@@ -157,7 +159,10 @@ describe("decideBrowserAction origin allowlist", () => {
 });
 
 function suggestConfig(overrides: Partial<JevConfig> = {}) {
-  return baseConfig({ policies: { "browser-action": { enabled: true, mode: "suggest", thresholds: {} } }, ...overrides });
+  return baseConfig({
+    policies: { "browser-action": { enabled: true, mode: "suggest", thresholds: {}, alwaysAuto: false, options: {} } },
+    ...overrides,
+  });
 }
 
 describe("decideBrowserAction shadow mode", () => {
@@ -250,7 +255,9 @@ describe("decideBrowserAction suggest/enforce mode", () => {
       {
         client,
         db: createFakeDb(),
-        config: baseConfig({ policies: { "browser-action": { enabled: true, mode: "enforce", thresholds: {} } } }),
+        config: baseConfig({
+          policies: { "browser-action": { enabled: true, mode: "enforce", thresholds: {}, alwaysAuto: false, options: {} } },
+        }),
         companyId: "company_1",
         log: vi.fn(),
       },
