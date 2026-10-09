@@ -1,10 +1,11 @@
+import { writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { policies } from "../src/policies/index.js";
 import type { Policy, PolicyContext } from "../src/policies/types.js";
 import { loadJsonlDataset } from "./dataset.js";
 import { summarize } from "./metrics.js";
-import type { EvalCase, EvalResult } from "./types.js";
+import type { CalibrationReportJson, EvalCase, EvalResult } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -77,6 +78,17 @@ function main() {
   const report = runEval(policy, datasetPath);
 
   console.log(JSON.stringify(report, null, 2));
+
+  const jsonReport: CalibrationReportJson = {
+    policy: report.policy,
+    generatedAt: new Date().toISOString(),
+    datasetSize: report.results.length,
+    metrics: report.metrics,
+  };
+  const outPath = join(__dirname, "reports", `${policy}.json`);
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, JSON.stringify(jsonReport, null, 2) + "\n");
+  console.log(`Wrote calibration report to ${outPath}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
