@@ -177,6 +177,46 @@ describe("jev decision tools (MCP)", () => {
   }
 });
 
+/**
+ * Caller-supplied identifiers (question names, candidate/skill ids) become
+ * ledger `answers` keys, so they're bounded to `/^[A-Za-z0-9_.:-]{1,64}$/`.
+ * `jev-verify` has no identifier field and is intentionally excluded.
+ */
+const BAD_IDENTIFIER_PARAMS: Partial<Record<Tool, unknown>> = {
+  "jev-ask": { state: "hello", questions: { "bad name!": { type: "noul", instructions: "Is this a bug?" } } },
+  "jev-classify-task": {
+    description: "Fix the login bug",
+    candidateSkills: [{ id: "bad id!", name: "Auth" }],
+  },
+  "jev-rerank": {
+    query: "how to reset a password",
+    candidates: [{ id: "bad id!", text: "Go to settings > reset password" }],
+  },
+};
+
+describe("jev decision tools reject out-of-shape caller-supplied identifiers", () => {
+  for (const [tool, params] of Object.entries(BAD_IDENTIFIER_PARAMS) as [Tool, unknown][]) {
+    it(`${tool} (MCP) returns "invalid-params" for an identifier outside [A-Za-z0-9_.:-]{1,64}`, async () => {
+      const harness = harnessWithFetch((async () => fixtureResponseFor(TOOL_ANSWERS[tool])) as Fetch);
+      await plugin.definition.setup(harness.ctx);
+
+      const result = await harness.executeTool<{ error?: string }>(tool, params);
+
+      expect(result.error).toBe("invalid-params");
+    });
+
+    it(`${ROUTE_FOR[tool]} (route) returns HTTP 400 {error:"invalid-params"} for the same bad identifier`, async () => {
+      const harness = harnessWithFetch((async () => fixtureResponseFor(TOOL_ANSWERS[tool])) as Fetch);
+      await plugin.definition.setup(harness.ctx);
+
+      const response = await plugin.definition.onApiRequest!(apiInput(ROUTE_FOR[tool], params));
+
+      expect(response.status).toBe(400);
+      expect((response.body as { error?: string }).error).toBe("invalid-params");
+    });
+  }
+});
+
 describe("jev decision tool API routes", () => {
   for (const tool of TOOLS) {
     const routeKey = ROUTE_FOR[tool];
@@ -274,6 +314,23 @@ describe("jev decision tool API routes", () => {
     expect(Array.isArray(response.body)).toBe(true);
     const query = harness.dbQueries.find((q) => q.sql.includes("jev_decisions"));
     expect(query?.params).toEqual(["company_1", "issue_1", 20]);
+  });
+
+  it("decisions-by-query returns 400 for a non-integer limit instead of silently ignoring it", async () => {
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities, "events.emit"] });
+    await plugin.definition.setup(harness.ctx);
+
+    const response = await plugin.definition.onApiRequest!(
+      apiInput("decisions-by-query", undefined, {
+        method: "GET",
+        path: "/decisions",
+        query: { issueId: "issue_1", limit: "not-a-number" },
+        companyId: "company_1",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect((response.body as { error?: string }).error).toBe("limit query param must be an integer");
   });
 
   it("decisions-by-query takes the first value of a repeated issueId/limit query param", async () => {

@@ -669,7 +669,12 @@ const plugin = definePlugin({
         const issueId = firstQueryValue(input.query.issueId);
         if (!issueId) return { status: 400, body: { error: "issueId query param is required" } };
         const limitValue = firstQueryValue(input.query.limit);
-        const limit = limitValue !== undefined && Number.isInteger(Number(limitValue)) ? Number(limitValue) : undefined;
+        let limit: number | undefined;
+        if (limitValue !== undefined) {
+          const parsed = Number(limitValue);
+          if (!Number.isInteger(parsed)) return { status: 400, body: { error: "limit query param must be an integer" } };
+          limit = parsed;
+        }
         return { status: 200, body: await listDecisionHistory(ctx.db, input.companyId, issueId, limit) };
       }
       case "policy-aggregate":

@@ -131,6 +131,25 @@ describe("rerankPolicy", () => {
     expect(Object.keys(questions).sort()).toEqual(["containsAnswer:c1", "injection:c1", "relevant:c1"]);
   });
 
+  it("names each candidate inside its own instructions, so multi-candidate asks aren't ambiguous", () => {
+    const questions = rerankPolicy.questions(
+      {
+        query: "q",
+        candidates: [
+          { id: "c1", text: "x" },
+          { id: "c2", text: "y" },
+        ],
+      },
+      baseCtx(),
+    );
+    for (const id of ["c1", "c2"]) {
+      for (const kind of ["relevant", "containsAnswer", "injection"]) {
+        const question = questions[`${kind}:${id}`] as { instructions: string };
+        expect(question.instructions).toContain(`"${id}"`);
+      }
+    }
+  });
+
   it("decides ranked and marks every per-candidate field observe-only", () => {
     const state = { query: "q", candidates: [{ id: "c1", text: "x" }] };
     const answers = {
