@@ -9,6 +9,7 @@
     ],
     "jsx": "react-jsx",
     "strict": true,
+    "allowJs": true,
     "skipLibCheck": true,
     "declaration": true,
     "declarationMap": true,
@@ -19,7 +20,8 @@
   "include": [
     "src",
     "tests",
-    "eval"
+    "eval",
+    "hooks"
   ],
   "exclude": [
     "dist",

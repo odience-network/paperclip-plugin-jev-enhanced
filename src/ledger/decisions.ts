@@ -23,6 +23,9 @@ export interface BeginDecisionInput {
    * provider call); `completeDecision` fills in the real value. */
   stateHash?: string;
   mode: PolicyMode;
+  /** Set by JevGuard's Pre/Post hooks (see `src/guard/evaluate.ts`); absent
+   * for every other policy and for `Stop` (no single tool applies). */
+  toolName?: string | null;
 }
 
 export interface CompleteDecisionInput {
@@ -57,6 +60,7 @@ export interface DecisionRow {
   mode: PolicyMode;
   outcome: DecisionOutcome;
   reason: string | null;
+  toolName: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -81,6 +85,7 @@ interface DecisionDbRow {
   mode: PolicyMode;
   outcome: DecisionOutcome;
   reason: string | null;
+  tool_name: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -106,6 +111,7 @@ function fromDbRow(row: DecisionDbRow): DecisionRow {
     mode: row.mode,
     outcome: row.outcome,
     reason: row.reason,
+    toolName: row.tool_name,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -121,8 +127,8 @@ export async function beginDecision(db: LedgerDb, input: BeginDecisionInput): Pr
   const id = input.id ?? randomUUID();
   await db.execute(
     `INSERT INTO ${tableName(db, "jev_decisions")}
-       (id, company_id, issue_id, run_id, agent_id, policy, policy_version, question_version, model, state_hash, mode, outcome)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'observed')`,
+       (id, company_id, issue_id, run_id, agent_id, policy, policy_version, question_version, model, state_hash, mode, outcome, tool_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'observed', $12)`,
     [
       id,
       input.companyId,
@@ -135,6 +141,7 @@ export async function beginDecision(db: LedgerDb, input: BeginDecisionInput): Pr
       input.model,
       input.stateHash ?? "",
       input.mode,
+      input.toolName ?? null,
     ],
   );
   return id;

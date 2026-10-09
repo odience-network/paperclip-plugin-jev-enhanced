@@ -9,9 +9,11 @@ import {
   type EnvSecretRefBinding,
   type PluginPerformActionContext,
 } from "@paperclipai/plugin-sdk";
-import { AuthenticationError, PermissionDeniedError } from "@typesafe-ai/sdk";
+import { AuthenticationError, PermissionDeniedError, type Questions } from "@typesafe-ai/sdk";
+import type { z } from "zod";
+import manifest from "./manifest.js";
 import { parseJevConfig, policyConfigFor, type JevConfig } from "./config.js";
-import { JevClient } from "./jev/client.js";
+import { JevClient, MissingApiKeyError } from "./jev/client.js";
 import { createInMemoryJevCache } from "./jev/cache.js";
 import { createPluginStateBudgetStore, BudgetExceededError } from "./jev/budget.js";
 import {
@@ -30,11 +32,48 @@ import {
   ISSUE_TYPE_CATALOG,
   type IssueTriageState,
   type RunPolicyResult,
+  type Policy,
 } from "./policies/index.js";
 import type { ApplyDeps } from "./apply/index.js";
 import type { SuggestDeps } from "./suggest/index.js";
+import { runDecisionTool, statusForToolError } from "./tools/runTool.js";
+import {
+  jevAskParamsSchema,
+  jevClassifyTaskParamsSchema,
+  jevVerifyParamsSchema,
+  jevRerankParamsSchema,
+  type JevAskParams,
+  type JevClassifyTaskParams,
+  type JevVerifyParams,
+  type JevRerankParams,
+} from "./tools/schemas.js";
+import { guardEvaluateRequestSchema } from "./guard/types.js";
+import { evaluateGuard, fallbackDecision, POLICY_FOR_HOOK } from "./guard/evaluate.js";
+import { createGuardRateLimiter, type GuardRateLimiter } from "./guard/rateLimit.js";
 
 const jevCache = createInMemoryJevCache();
+
+/** One rate limiter per company, sized from that company's own
+ * `guardRails.rateLimit` config the first time `guard/evaluate` sees it. A
+ * config change to the limits only takes effect on worker restart —
+ * acceptable for a DoS backstop whose defaults are the same for everyone. */
+const guardRateLimiters = new Map<string, GuardRateLimiter>();
+
+function guardRateLimiterFor(companyId: string, config: JevConfig): GuardRateLimiter {
+  let limiter = guardRateLimiters.get(companyId);
+  if (!limiter) {
+    limiter = createGuardRateLimiter(config.guardRails.rateLimit.requestsPerSecond, config.guardRails.rateLimit.tokensPerSecond);
+    guardRateLimiters.set(companyId, limiter);
+  }
+  return limiter;
+}
+
+/** Rough, cheap token estimate for the rate limiter — not the billed usage
+ * (that comes back from Jev itself after the call). Good enough to size a
+ * DoS backstop; off by 2x in either direction doesn't matter here. */
+function estimateRequestTokens(excerpt: string | undefined): number {
+  return 200 + Math.ceil((excerpt?.length ?? 0) / 4);
+}
 
 /** This plugin's own `originKind` — `preFilter` uses it to never triage an
  * issue the plugin itself created, matching `manifest.ts`'s `id`. */
@@ -191,7 +230,7 @@ function buildClient(ctx: PluginContext, config: JevConfig): JevClient {
   return new JevClient({
     resolveApiKey: async () => {
       if (!config.apiKeyRef) {
-        throw new Error("No TypeSafe API key bound. Bind a vault secret to apiKeyRef.");
+        throw new MissingApiKeyError();
       }
       return ctx.secrets.resolve(config.apiKeyRef as string | EnvSecretRefBinding);
     },
@@ -210,6 +249,69 @@ async function loadConfig(ctx: PluginContext, companyId?: string): Promise<JevCo
   return parseJevConfig(await ctx.config.get(companyId));
 }
 
+/** Query params the host parses as repeated keys arrive as `string[]` — API
+ * routes here only ever want the first value. */
+function firstQueryValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/** Looks up a tool's `parametersSchema` from `manifest.ts` instead of
+ * duplicating the JSON Schema literal at the registration call site — the
+ * manifest declaration is what agents and docs tooling see, so this keeps
+ * `ctx.tools.register` from drifting out of sync with it. */
+function toolSchema(name: string) {
+  const declaration = manifest.tools?.find((tool) => tool.name === name);
+  if (!declaration) throw new Error(`No manifest tool declaration for "${name}"`);
+  return declaration.parametersSchema;
+}
+
+function toAskState(params: JevAskParams) {
+  return { state: params.state, questions: params.questions as unknown as Questions };
+}
+
+function toClassifyTaskState(params: JevClassifyTaskParams) {
+  return { description: params.description, candidateSkills: params.candidateSkills ?? [] };
+}
+
+function toVerifyState(params: JevVerifyParams) {
+  return { claim: params.claim, evidence: params.evidence };
+}
+
+function toRerankState(params: JevRerankParams) {
+  return { query: params.query, candidates: params.candidates };
+}
+
+/** Shared by every `jev:*` tool handler and `tool-*` API route: resolves
+ * this company's config/client, runs `rawParams` through `runDecisionTool`,
+ * and never throws — callers map the resulting `ToolOutcome` to a
+ * `ToolResult` or `PluginApiResponse` themselves. */
+async function runJevTool<TParams, TState>(
+  ctx: PluginContext,
+  companyId: string,
+  policy: Policy<TState>,
+  paramsSchema: z.ZodType<TParams>,
+  toState: (params: TParams) => TState,
+  rawParams: unknown,
+  actor: { runId?: string | null; agentId?: string | null } = {},
+) {
+  const config = await loadConfig(ctx, companyId);
+  const client = buildClient(ctx, config);
+  return runDecisionTool(
+    {
+      rawParams,
+      paramsSchema,
+      toState,
+      policy,
+      config,
+      companyId,
+      issueId: (params) => (params as { issueId?: string }).issueId,
+      runId: actor.runId,
+      agentId: actor.agentId,
+    },
+    { client, db: ctx.db, apply: buildApplyDeps(ctx), suggest: buildSuggestDeps(ctx) },
+  );
+}
+
 /** `params.companyId` is the host-authorized scope the RPC bridge injects
  * over any UI-supplied value (see `GetDataParams`) for a company-scoped
  * bridge call. The one exception: a call with no company scope at all —
@@ -224,6 +326,57 @@ function requireCompanyId(params: Record<string, unknown>): string {
     throw new Error("companyId is required");
   }
   return companyId;
+}
+
+/** Handles `POST /guard/evaluate` for the harness hooks. Body shape is
+ * validated here (never trusted from the request) before anything else runs;
+ * the rate limiter is consulted before the issue fetch / Jev call so a
+ * rate-limited caller never costs more than a map lookup and a bucket check. */
+async function handleGuardEvaluate(ctx: PluginContext, input: PluginApiRequestInput): Promise<PluginApiResponse> {
+  const parsed = guardEvaluateRequestSchema.safeParse(input.body);
+  if (!parsed.success) {
+    return { status: 400, body: { error: "invalid guard/evaluate request", issues: parsed.error.issues } };
+  }
+  const request = parsed.data;
+
+  const config = await loadConfig(ctx, input.companyId);
+  const policyConfig = policyConfigFor(config, POLICY_FOR_HOOK[request.hookKind].name);
+  const limiter = guardRateLimiterFor(input.companyId, config);
+  if (!limiter.tryConsume(input.companyId, estimateRequestTokens(request.excerpt))) {
+    // Reuse the same fail-closed logic a Jev timeout/error would hit, so a
+    // caller can't bypass `enforce`-mode blocking by flooding the route past
+    // the rate limit: a 429 carries the policy's fallback decision in its
+    // body rather than leaving the hook client to default to "allow".
+    const decision = fallbackDecision(request.hookKind, policyConfig.mode);
+    return { status: 429, body: { error: "rate limit exceeded", decision, reason: "rate-limited" } };
+  }
+
+  const client = buildClient(ctx, config);
+  const issue = request.issueId ? await ctx.issues.get(request.issueId, input.companyId) : null;
+
+  // `input.actor.runId` is the host-authenticated run id; `request.runId` is
+  // attacker-controlled request-body content. Prefer the authenticated value
+  // so the loop guard can't be defeated by an agent sending a fresh runId on
+  // every call. Falls back to the body value when the host doesn't surface
+  // an actor runId for this route — see docs/SECURITY.md for that gap.
+  const effectiveRequest = input.actor.runId ? { ...request, runId: input.actor.runId } : request;
+
+  const result = await evaluateGuard(effectiveRequest, {
+    client,
+    db: ctx.db,
+    config,
+    companyId: input.companyId,
+    agentId: input.actor.agentId ?? null,
+    issue: issue ? { title: issue.title, description: issue.description } : null,
+    rails: {
+      state: ctx.state,
+      interactions: {
+        listInteractions: (issueId, companyId) => ctx.issues.listInteractions(issueId, companyId),
+      },
+    },
+  });
+
+  return { status: 200, body: result };
 }
 
 const plugin = definePlugin({
@@ -426,6 +579,85 @@ const plugin = definePlugin({
         return { content: JSON.stringify(result), data: result };
       },
     );
+
+    ctx.tools.register(
+      "jev-ask",
+      {
+        displayName: "Jev Ask",
+        description: "Generic noul/choice/score question-asking tool for TypeSafe's Jev decision model.",
+        parametersSchema: toolSchema("jev-ask"),
+      },
+      async (params, runCtx) => {
+        const outcome = await runJevTool(ctx, runCtx.companyId, policies.ask, jevAskParamsSchema, toAskState, params, {
+          runId: runCtx.runId,
+          agentId: runCtx.agentId,
+        });
+        return outcome.ok ? { content: JSON.stringify(outcome.result), data: outcome.result } : { error: outcome.error };
+      },
+    );
+
+    ctx.tools.register(
+      "jev-classify-task",
+      {
+        displayName: "Jev Classify Task",
+        description: "Classifies a unit of work by kind, model tier, and review depth.",
+        parametersSchema: toolSchema("jev-classify-task"),
+      },
+      async (params, runCtx) => {
+        const outcome = await runJevTool(
+          ctx,
+          runCtx.companyId,
+          policies["classify-task"],
+          jevClassifyTaskParamsSchema,
+          toClassifyTaskState,
+          params,
+          { runId: runCtx.runId, agentId: runCtx.agentId },
+        );
+        return outcome.ok ? { content: JSON.stringify(outcome.result), data: outcome.result } : { error: outcome.error };
+      },
+    );
+
+    ctx.tools.register(
+      "jev-verify",
+      {
+        displayName: "Jev Verify",
+        description: "Checks whether evidence supports, contradicts, or says nothing about a claim.",
+        parametersSchema: toolSchema("jev-verify"),
+      },
+      async (params, runCtx) => {
+        const outcome = await runJevTool(
+          ctx,
+          runCtx.companyId,
+          policies.verify,
+          jevVerifyParamsSchema,
+          toVerifyState,
+          params,
+          { runId: runCtx.runId, agentId: runCtx.agentId },
+        );
+        return outcome.ok ? { content: JSON.stringify(outcome.result), data: outcome.result } : { error: outcome.error };
+      },
+    );
+
+    ctx.tools.register(
+      "jev-rerank",
+      {
+        displayName: "Jev Rerank",
+        description: "Scores candidates against a query for relevance, answer-containment, and injection risk.",
+        parametersSchema: toolSchema("jev-rerank"),
+      },
+      async (params, runCtx) => {
+        const outcome = await runJevTool(
+          ctx,
+          runCtx.companyId,
+          policies.rerank,
+          jevRerankParamsSchema,
+          toRerankState,
+          params,
+          { runId: runCtx.runId, agentId: runCtx.agentId },
+        );
+        return outcome.ok ? { content: JSON.stringify(outcome.result), data: outcome.result } : { error: outcome.error };
+      },
+    );
   },
 
   async onHealth(): Promise<PluginHealthDiagnostics> {
@@ -509,11 +741,76 @@ const plugin = definePlugin({
         return { status: 200, body: await getLatestDecision(ctx.db, input.companyId, input.params.issueId) };
       case "decision-history":
         return { status: 200, body: await listDecisionHistory(ctx.db, input.companyId, input.params.issueId) };
+      case "decisions-by-query": {
+        const issueId = firstQueryValue(input.query.issueId);
+        if (!issueId) return { status: 400, body: { error: "issueId query param is required" } };
+        const limitValue = firstQueryValue(input.query.limit);
+        let limit: number | undefined;
+        if (limitValue !== undefined) {
+          const parsed = Number(limitValue);
+          if (!Number.isInteger(parsed)) return { status: 400, body: { error: "limit query param must be an integer" } };
+          limit = parsed;
+        }
+        return { status: 200, body: await listDecisionHistory(ctx.db, input.companyId, issueId, limit) };
+      }
       case "policy-aggregate":
         return {
           status: 200,
           body: await getPolicyAggregate(ctx.db, input.companyId, input.params.policy),
         };
+      case "tool-ask": {
+        const outcome = await runJevTool(ctx, input.companyId, policies.ask, jevAskParamsSchema, toAskState, input.body, {
+          runId: input.actor.runId,
+          agentId: input.actor.agentId,
+        });
+        return outcome.ok
+          ? { status: 200, body: outcome.result }
+          : { status: statusForToolError(outcome.error), body: { error: outcome.error } };
+      }
+      case "tool-classify-task": {
+        const outcome = await runJevTool(
+          ctx,
+          input.companyId,
+          policies["classify-task"],
+          jevClassifyTaskParamsSchema,
+          toClassifyTaskState,
+          input.body,
+          { runId: input.actor.runId, agentId: input.actor.agentId },
+        );
+        return outcome.ok
+          ? { status: 200, body: outcome.result }
+          : { status: statusForToolError(outcome.error), body: { error: outcome.error } };
+      }
+      case "tool-verify": {
+        const outcome = await runJevTool(
+          ctx,
+          input.companyId,
+          policies.verify,
+          jevVerifyParamsSchema,
+          toVerifyState,
+          input.body,
+          { runId: input.actor.runId, agentId: input.actor.agentId },
+        );
+        return outcome.ok
+          ? { status: 200, body: outcome.result }
+          : { status: statusForToolError(outcome.error), body: { error: outcome.error } };
+      }
+      case "tool-rerank": {
+        const outcome = await runJevTool(
+          ctx,
+          input.companyId,
+          policies.rerank,
+          jevRerankParamsSchema,
+          toRerankState,
+          input.body,
+          { runId: input.actor.runId, agentId: input.actor.agentId },
+        );
+        return outcome.ok
+          ? { status: 200, body: outcome.result }
+          : { status: statusForToolError(outcome.error), body: { error: outcome.error } };
+      }
+      case "guard-evaluate":
+        return handleGuardEvaluate(ctx, input);
       default:
         return { status: 404, body: { error: `unknown route: ${input.routeKey}` } };
     }
