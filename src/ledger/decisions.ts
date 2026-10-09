@@ -23,6 +23,9 @@ export interface BeginDecisionInput {
    * provider call); `completeDecision` fills in the real value. */
   stateHash?: string;
   mode: PolicyMode;
+  /** Set by JevGuard's Pre/Post hooks (see `src/guard/evaluate.ts`); absent
+   * for every other policy and for `Stop` (no single tool applies). */
+  toolName?: string | null;
 }
 
 export interface CompleteDecisionInput {
@@ -57,6 +60,7 @@ export interface DecisionRow {
   mode: PolicyMode;
   outcome: DecisionOutcome;
   reason: string | null;
+  toolName: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -81,6 +85,7 @@ interface DecisionDbRow {
   mode: PolicyMode;
   outcome: DecisionOutcome;
   reason: string | null;
+  tool_name: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -106,6 +111,7 @@ function fromDbRow(row: DecisionDbRow): DecisionRow {
     mode: row.mode,
     outcome: row.outcome,
     reason: row.reason,
+    toolName: row.tool_name,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -121,8 +127,8 @@ export async function beginDecision(db: LedgerDb, input: BeginDecisionInput): Pr
   const id = input.id ?? randomUUID();
   await db.execute(
     `INSERT INTO ${tableName(db, "jev_decisions")}
-       (id, company_id, issue_id, run_id, agent_id, policy, policy_version, question_version, model, state_hash, mode, outcome)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'observed')`,
+       (id, company_id, issue_id, run_id, agent_id, policy, policy_version, question_version, model, state_hash, mode, outcome, tool_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'observed', $12)`,
     [
       id,
       input.companyId,
@@ -135,6 +141,7 @@ export async function beginDecision(db: LedgerDb, input: BeginDecisionInput): Pr
       input.model,
       input.stateHash ?? "",
       input.mode,
+      input.toolName ?? null,
     ],
   );
   return id;
@@ -221,6 +228,33 @@ export async function listDecisionHistory(
      WHERE company_id = $1 AND issue_id = $2
      ORDER BY created_at DESC LIMIT $3`,
     [companyId, issueId, boundedLimit],
+  );
+  return rows.map(fromDbRow);
+}
+
+/** Hard ceiling on `listRecentDecisionsForPolicy`'s `limit`, mirroring
+ * `MAX_DECISION_HISTORY_LIMIT`. */
+const MAX_RECENT_DECISIONS_LIMIT = 100;
+
+/**
+ * Cross-issue feed of one policy's most recent decisions for a company —
+ * `getLatestDecision`/`listDecisionHistory` are both scoped to a single
+ * `issueId`, which doesn't fit a dashboard widget that needs to show recent
+ * `comment-triage` activity across every issue. Tenant-isolated the same way:
+ * `companyId` is always part of the `WHERE` clause.
+ */
+export async function listRecentDecisionsForPolicy(
+  db: LedgerDb,
+  companyId: string,
+  policy: string,
+  limit = 20,
+): Promise<DecisionRow[]> {
+  const boundedLimit = Math.max(1, Math.min(limit, MAX_RECENT_DECISIONS_LIMIT));
+  const rows = await db.query<DecisionDbRow>(
+    `SELECT * FROM ${tableName(db, "jev_decisions")}
+     WHERE company_id = $1 AND policy = $2
+     ORDER BY created_at DESC LIMIT $3`,
+    [companyId, policy, boundedLimit],
   );
   return rows.map(fromDbRow);
 }

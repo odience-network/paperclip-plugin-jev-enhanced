@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 import { DEFAULT_JEV_MODEL } from "./jev/models.js";
+
+const jevDecisionsSkillMarkdown = readFileSync(new URL("../skills/jev-decisions/SKILL.md", import.meta.url), "utf8");
 
 const manifest: PaperclipPluginManifestV1 = {
   id: "odience.jev",
@@ -12,6 +15,7 @@ const manifest: PaperclipPluginManifestV1 = {
   categories: ["connector", "automation"],
   capabilities: [
     "events.subscribe",
+    "events.emit",
     "plugin.state.read",
     "plugin.state.write",
     "database.namespace.read",
@@ -21,6 +25,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "secrets.read-ref",
     "api.routes.register",
     "agent.tools.register",
+    "skills.managed",
     "jobs.schedule",
     "ui.dashboardWidget.register",
     "ui.detailTab.register",
@@ -32,7 +37,11 @@ const manifest: PaperclipPluginManifestV1 = {
     "issues.read",
     "agents.read",
     "issues.update",
+    "issues.wakeup",
     "issue.interactions.create",
+    "issue.interactions.read",
+    "issue.comments.read",
+    "issue.comments.create",
   ],
   entrypoints: {
     worker: "./dist/worker.js",
@@ -161,6 +170,108 @@ const manifest: PaperclipPluginManifestV1 = {
         required: ["issueId"],
       },
     },
+    {
+      name: "jev-ask",
+      displayName: "Jev Ask",
+      description:
+        "Generic question-asking tool for TypeSafe's Jev decision model: ask one or more atomic noul/choice/score " +
+        "questions about arbitrary state and get back typed answers plus a policy verdict. Prefer the dedicated " +
+        "jev-classify-task/jev-verify/jev-rerank tools when they fit the question — they already phrase it " +
+        "correctly for their use case. Jev is not injection-aware and cannot generate text; see the " +
+        "jev-decisions skill for when to use which tool.",
+      parametersSchema: {
+        type: "object",
+        properties: {
+          issueId: { type: "string", description: "Issue this question is about, if any. Optional." },
+          state: {
+            description: "The JSON state the questions below are about: a non-empty string, object, or array.",
+          },
+          questions: {
+            type: "object",
+            description:
+              "Map of answer-name to a noul ({type:\"noul\", instructions}), choice ({type:\"choice\", " +
+              "instructions, criteria: {label: description|null}}), or score ({type:\"score\", instructions, " +
+              "criteria: [description, description, ...]}) question. At least one question is required. See " +
+              "README.md for full examples.",
+            additionalProperties: true,
+          },
+        },
+        required: ["state", "questions"],
+      },
+    },
+    {
+      name: "jev-classify-task",
+      displayName: "Jev Classify Task",
+      description:
+        "Classifies a unit of work by kind (feature/bug/refactor/chore/docs/research), the model tier it needs " +
+        "(fast/standard/strong), and how thorough review should be before it ships (light/standard/thorough). " +
+        "Optionally recommends which of the given candidate skills to load. Returns observations only — never " +
+        "applied to any issue field.",
+      parametersSchema: {
+        type: "object",
+        properties: {
+          issueId: { type: "string", description: "Issue this task corresponds to, if any. Optional." },
+          description: { type: "string", description: "The task description to classify." },
+          candidateSkills: {
+            type: "array",
+            description: "Skills to ask a per-skill load recommendation for. Optional; defaults to none.",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                name: { type: "string" },
+              },
+              required: ["id", "name"],
+            },
+          },
+        },
+        required: ["description"],
+      },
+    },
+    {
+      name: "jev-verify",
+      displayName: "Jev Verify",
+      description:
+        "Checks whether a piece of evidence supports, contradicts, or says nothing about a claim — for example, " +
+        "whether test output actually supports a 'this is done' completion claim. Never trust a restatement of " +
+        "the claim as its own evidence.",
+      parametersSchema: {
+        type: "object",
+        properties: {
+          issueId: { type: "string", description: "Issue this claim is about, if any. Optional." },
+          claim: { type: "string", description: "A single atomic claim, phrased as one state." },
+          evidence: { type: "string", description: "The evidence to check the claim against, e.g. test output." },
+        },
+        required: ["claim", "evidence"],
+      },
+    },
+    {
+      name: "jev-rerank",
+      displayName: "Jev Rerank",
+      description:
+        "Scores each candidate against a query on relevance, whether it directly contains the answer, and " +
+        "whether it looks like a prompt-injection attempt rather than ordinary content. Returns per-candidate " +
+        "scores for the caller to rerank with — this tool never reorders candidates itself.",
+      parametersSchema: {
+        type: "object",
+        properties: {
+          issueId: { type: "string", description: "Issue this rerank is for, if any. Optional." },
+          query: { type: "string", description: "The query each candidate is scored against." },
+          candidates: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                text: { type: "string" },
+              },
+              required: ["id", "text"],
+            },
+          },
+        },
+        required: ["query", "candidates"],
+      },
+    },
   ],
   apiRoutes: [
     {
@@ -180,12 +291,71 @@ const manifest: PaperclipPluginManifestV1 = {
       companyResolution: { from: "issue", param: "issueId" },
     },
     {
+      routeKey: "decisions-by-query",
+      method: "GET",
+      path: "/decisions",
+      auth: "board-or-agent",
+      capability: "api.routes.register",
+      companyResolution: { from: "query", key: "companyId" },
+    },
+    {
       routeKey: "policy-aggregate",
       method: "GET",
       path: "/policies/:policy/aggregate",
       auth: "board",
       capability: "api.routes.register",
       companyResolution: { from: "query", key: "companyId" },
+    },
+    {
+      routeKey: "tool-ask",
+      method: "POST",
+      path: "/tools/ask",
+      auth: "board-or-agent",
+      capability: "api.routes.register",
+      companyResolution: { from: "body", key: "companyId" },
+    },
+    {
+      routeKey: "tool-classify-task",
+      method: "POST",
+      path: "/tools/classify-task",
+      auth: "board-or-agent",
+      capability: "api.routes.register",
+      companyResolution: { from: "body", key: "companyId" },
+    },
+    {
+      routeKey: "tool-verify",
+      method: "POST",
+      path: "/tools/verify",
+      auth: "board-or-agent",
+      capability: "api.routes.register",
+      companyResolution: { from: "body", key: "companyId" },
+    },
+    {
+      routeKey: "tool-rerank",
+      method: "POST",
+      path: "/tools/rerank",
+      auth: "board-or-agent",
+      capability: "api.routes.register",
+      companyResolution: { from: "body", key: "companyId" },
+    },
+    {
+      routeKey: "guard-evaluate",
+      method: "POST",
+      path: "/guard/evaluate",
+      auth: "agent",
+      capability: "api.routes.register",
+      companyResolution: { from: "body", key: "companyId" },
+      checkoutPolicy: "none",
+    },
+  ],
+  skills: [
+    {
+      skillKey: "jev-decisions",
+      displayName: "Jev Decisions",
+      description:
+        "When and how to call the jev:ask/classify-task/verify/rerank tools: phrasing atomic questions, " +
+        "threshold rules, and what Jev cannot do.",
+      markdown: jevDecisionsSkillMarkdown,
     },
   ],
   ui: {
