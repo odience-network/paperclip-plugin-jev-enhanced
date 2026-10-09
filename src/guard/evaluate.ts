@@ -25,7 +25,7 @@ export interface EvaluateGuardDeps {
   issue?: { title: string; description: string | null } | null;
 }
 
-const POLICY_FOR_HOOK: Record<GuardHookKind, Policy<any>> = {
+export const POLICY_FOR_HOOK: Record<GuardHookKind, Policy<any>> = {
   PreToolUse: guardPrePolicy,
   PostToolUse: guardPostPolicy,
   Stop: guardStopPolicy,
@@ -38,15 +38,23 @@ const POLICY_FOR_HOOK: Record<GuardHookKind, Policy<any>> = {
  * the only case that fails closed — to `ask`, never a silent `allow` and
  * never a `deny` manufactured purely from an infra failure (which would
  * itself be a DoS lever against the whole run). */
-function fallbackDecision(hookKind: GuardHookKind, mode: PolicyMode): GuardDecision {
+export function fallbackDecision(hookKind: GuardHookKind, mode: PolicyMode): GuardDecision {
   if (mode !== "enforce") return "allow";
   if (hookKind === "Stop") return "allow";
   return "ask";
 }
 
-function outcomeFor(mode: PolicyMode, finalDecision: GuardDecision): DecisionOutcome {
-  if (mode === "shadow") return "observed";
-  if (mode === "suggest") return "suggested";
+/** `bypassMode` is `true` only for rail verdicts (kill switch, blocklist,
+ * loop guard) that `evaluateGuard` applied without going through
+ * `effectiveDecision` — those are real enforced outcomes (`blocked`/
+ * `applied`) in every mode, not merely `observed`/`suggested`, because the
+ * whole point of a `bypassMode` rail is that it isn't subject to the
+ * policy's mode in the first place. */
+function outcomeFor(mode: PolicyMode, finalDecision: GuardDecision, bypassMode = false): DecisionOutcome {
+  if (!bypassMode) {
+    if (mode === "shadow") return "observed";
+    if (mode === "suggest") return "suggested";
+  }
   return finalDecision === "deny" ? "blocked" : "applied";
 }
 
@@ -143,8 +151,11 @@ export async function evaluateGuard(request: GuardEvaluateRequest, deps: Evaluat
 
   const railVerdict = await runRails(request, deps.companyId, deps.config.guardRails, deps.rails);
   if (railVerdict) {
-    const finalDecision = effectiveDecision(policyConfig.mode, railVerdict.decision);
-    await recordRailOnlyDecision(deps, request, policy, policyConfig.mode, finalDecision, railVerdict.reason);
+    // `bypassMode` rails (kill switch, blocklist, loop guard) apply verbatim —
+    // never downgraded by `effectiveDecision` — so a `shadow`-mode policy
+    // (the shipped default) can't silently turn their `deny` into an `allow`.
+    const finalDecision = railVerdict.bypassMode ? railVerdict.decision : effectiveDecision(policyConfig.mode, railVerdict.decision);
+    await recordRailOnlyDecision(deps, request, policy, policyConfig.mode, finalDecision, railVerdict.reason, railVerdict.bypassMode);
     return {
       decision: finalDecision,
       reason: railVerdict.reason,
@@ -263,6 +274,7 @@ async function recordRailOnlyDecision(
   mode: PolicyMode,
   finalDecision: GuardDecision,
   reason: string,
+  bypassMode = false,
 ): Promise<void> {
   const decisionId = await beginDecision(deps.db, {
     companyId: deps.companyId,
@@ -284,7 +296,7 @@ async function recordRailOnlyDecision(
     latencyMs: 0,
     usage: { input_tokens: 0, output_tokens: 0 },
     costUsd: 0,
-    outcome: outcomeFor(mode, finalDecision),
+    outcome: outcomeFor(mode, finalDecision, bypassMode),
     reason,
   });
 }

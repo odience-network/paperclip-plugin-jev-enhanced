@@ -48,7 +48,7 @@ import {
   type JevRerankParams,
 } from "./tools/schemas.js";
 import { guardEvaluateRequestSchema } from "./guard/types.js";
-import { evaluateGuard } from "./guard/evaluate.js";
+import { evaluateGuard, fallbackDecision, POLICY_FOR_HOOK } from "./guard/evaluate.js";
 import { createGuardRateLimiter, type GuardRateLimiter } from "./guard/rateLimit.js";
 
 const jevCache = createInMemoryJevCache();
@@ -340,15 +340,28 @@ async function handleGuardEvaluate(ctx: PluginContext, input: PluginApiRequestIn
   const request = parsed.data;
 
   const config = await loadConfig(ctx, input.companyId);
+  const policyConfig = policyConfigFor(config, POLICY_FOR_HOOK[request.hookKind].name);
   const limiter = guardRateLimiterFor(input.companyId, config);
   if (!limiter.tryConsume(input.companyId, estimateRequestTokens(request.excerpt))) {
-    return { status: 429, body: { error: "rate limit exceeded" } };
+    // Reuse the same fail-closed logic a Jev timeout/error would hit, so a
+    // caller can't bypass `enforce`-mode blocking by flooding the route past
+    // the rate limit: a 429 carries the policy's fallback decision in its
+    // body rather than leaving the hook client to default to "allow".
+    const decision = fallbackDecision(request.hookKind, policyConfig.mode);
+    return { status: 429, body: { error: "rate limit exceeded", decision, reason: "rate-limited" } };
   }
 
   const client = buildClient(ctx, config);
   const issue = request.issueId ? await ctx.issues.get(request.issueId, input.companyId) : null;
 
-  const result = await evaluateGuard(request, {
+  // `input.actor.runId` is the host-authenticated run id; `request.runId` is
+  // attacker-controlled request-body content. Prefer the authenticated value
+  // so the loop guard can't be defeated by an agent sending a fresh runId on
+  // every call. Falls back to the body value when the host doesn't surface
+  // an actor runId for this route — see docs/SECURITY.md for that gap.
+  const effectiveRequest = input.actor.runId ? { ...request, runId: input.actor.runId } : request;
+
+  const result = await evaluateGuard(effectiveRequest, {
     client,
     db: ctx.db,
     config,

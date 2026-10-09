@@ -22,18 +22,62 @@ actual tool-call traffic and the numbers below superseded.
 
 ## Results
 
-| Policy | Rows | Accuracy | Agreement | ECE | Avg latency | Total cost |
-|---|---|---|---|---|---|---|
-| guard-pre | 126 | 99.2% | 96.8% | 0.153 | 753ms | $0.0093 |
-| guard-post | 60 | 100% | 90.0% | 0.540 | 652ms | $0.0036 |
-| guard-stop | 42 | 100% | 97.6% | 0.526 | 548ms | $0.0021 |
+| Policy | Rows | Accuracy | Agreement | ECE | False positive rate | Avg latency (synthetic) | Total cost |
+|---|---|---|---|---|---|---|---|
+| guard-pre | 126 | 99.2% | 96.8% | 0.153 | 0.0% | 753ms | $0.0093 |
+| guard-post | 60 | 100% | 90.0% | 0.540 | 0.0% | 652ms | $0.0036 |
+| guard-stop | 42 | 100% | 97.6% | 0.526 | 0.0% | 548ms | $0.0021 |
 
 `accuracy` = predicted verdict (from `decide()` on the recorded answers)
 matches the scenario's labeled `expectedVerdict`. `agreement` = predicted
 verdict matches a separately-perturbed `humanVerdict` (~5% of rows have a
 deliberately disagreeing human label, to exercise this metric distinctly from
 raw accuracy per `eval/metrics.ts`). `ece` is Expected Calibration Error
-between the policy's reported `confidence` and correctness.
+between the policy's reported `confidence` and correctness. **False positive
+rate** (`eval/metrics.ts`'s `falsePositiveRate`) is, among rows labeled
+`expectedVerdict: "allow"` (benign calls), the fraction the policy would have
+intervened on with `ask`/`deny` instead — the number that matters for
+"would this policy be annoying in practice," distinct from overall accuracy.
+It is 0% for all three policies on this corpus; given the corpus is
+synthetic (see below) this should be read as "the implemented `decide()`
+logic doesn't misfire on its own designed-benign scenarios," not as
+"operators will see a 0% false-positive rate in production" — the live
+shadow re-run (tracked in a follow-up issue, see below) is what will actually
+answer that.
+
+**"Avg latency (synthetic)" is not a measured number.** It is copied through
+from each fixture row's hand-authored `latencyMs` field
+(`eval/generate-guard-fixtures.ts`) and reflects nothing about this plugin's
+or a real provider's actual performance — it exists only so `eval/metrics.ts`'s
+`avgLatencyMs` has non-null input while running against a recorded corpus
+instead of a live provider. Do not use this number for capacity planning or
+SLA-setting. The one real, measured latency number in this report is the
+guard-route overhead benchmark below.
+
+## Guard route overhead (measured, not synthetic)
+
+`pnpm eval:bench-guard-route` (`eval/bench-guard-route.ts`) measures what
+this plugin itself adds on top of a Jev call — rails (`runRails`), ledger
+`beginDecision`/`completeDecision` writes, question-building, redaction, and
+`evaluateGuard`'s own control flow — by running `evaluateGuard` in-process
+with the Jev HTTP call stubbed to resolve immediately (no real network hop)
+and the ledger backed by an in-memory fake (no real DB round trip). It is
+therefore a *lower bound* on real end-to-end latency, not a replacement for
+it: a real deployment adds real Jev network/inference time and a real
+database write on top of these numbers. 500 iterations per hook kind, after
+a 20-iteration warmup:
+
+| Hook kind | p50 | p95 | max |
+|---|---|---|---|
+| PreToolUse | 0.37ms | 0.97ms | 11.78ms |
+| PostToolUse | 0.22ms | 0.47ms | 6.66ms |
+| Stop | 0.16ms | 0.37ms | 2.05ms |
+
+This confirms the plugin's own overhead is negligible relative to
+`guardRails.timeBudgetMs`'s default 1500ms — essentially all of that budget
+is available for the actual Jev round trip. The `max` outliers (one-off GC
+pauses / event-loop scheduling in the benchmark process itself, not a
+systemic issue) are well within the same budget too.
 
 ## Findings
 

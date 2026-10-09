@@ -60,13 +60,28 @@ describe("evaluateGuard transport fallback", () => {
     expect(result.decision).toBe("deny");
   });
 
-  it("falls back on a non-2xx response", async () => {
+  it("falls back on a non-2xx response with no structured decision in the body", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) }),
     );
     const result = await evaluateGuard(baseEnv, { hookKind: "PreToolUse" });
     expect(result.decision).toBe("allow");
+    expect(result.reason).toBe("harness-transport-error");
+  });
+
+  it("honors the server's fail-closed decision on a 429, instead of the client's own default-allow fallback", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        json: async () => ({ error: "rate limit exceeded", decision: "ask", reason: "rate-limited" }),
+      }),
+    );
+    const result = await evaluateGuard(baseEnv, { hookKind: "PreToolUse" });
+    expect(result.decision).toBe("ask");
+    expect(result.reason).toBe("rate-limited");
   });
 
   it("passes through a successful response", async () => {

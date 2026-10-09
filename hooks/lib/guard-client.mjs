@@ -72,15 +72,23 @@ export function readHarnessEnv() {
 
 /**
  * Calls `guard/evaluate`. On any transport-level failure (network error,
- * non-2xx, malformed JSON, or the client-side timeout) this never throws:
- * it returns the configured fallback decision instead, because a harness
- * script that crashes on a network blip would itself be a DoS lever against
- * every tool call in the run. Default fallback is "allow" (fail-open) with a
- * loud stderr warning; set `PAPERCLIP_GUARD_FAIL_CLOSED=1` to fail "deny"
- * instead for higher-security environments. This is a harness-level
- * transport fallback, independent of (and in addition to) the plugin's own
+ * malformed JSON, or the client-side timeout) this never throws: it returns
+ * the configured fallback decision instead, because a harness script that
+ * crashes on a network blip would itself be a DoS lever against every tool
+ * call in the run. Default fallback is "allow" (fail-open) with a loud
+ * stderr warning; set `PAPERCLIP_GUARD_FAIL_CLOSED=1` to fail "deny" instead
+ * for higher-security environments. This is a harness-level transport
+ * fallback, independent of (and in addition to) the plugin's own
  * server-side fail-open/fail-closed logic for actual Jev-call failures —
  * see docs/SECURITY.md.
+ *
+ * A non-2xx response is NOT automatically treated as a transport failure:
+ * the server returns its own policy-derived fallback decision in the body
+ * (e.g. a 429 from the rate limiter carries the `enforce`-mode fail-closed
+ * decision computed server-side). That decision is honored directly rather
+ * than falling through to this client's own default-"allow" fallback —
+ * otherwise flooding the route past its rate limit would be a cheap way to
+ * bypass enforcement instead of just getting rate-limited.
  */
 export async function evaluateGuard(env, body) {
   const controller = new AbortController();
@@ -95,10 +103,16 @@ export async function evaluateGuard(env, body) {
       body: JSON.stringify({ ...body, runId: env.runId, issueId: body.issueId ?? env.issueId }),
       signal: controller.signal,
     });
+    const result = await res.json().catch(() => null);
     if (!res.ok) {
+      if (result && typeof result.decision === "string") {
+        process.stderr.write(
+          `[jevguard] guard/evaluate returned ${res.status} (${result.reason ?? "no reason"}); honoring server decision "${result.decision}"\n`,
+        );
+        return result;
+      }
       throw new Error(`guard/evaluate returned ${res.status}`);
     }
-    const result = await res.json();
     if (!result || typeof result.decision !== "string") {
       throw new Error("guard/evaluate returned an unexpected body shape");
     }

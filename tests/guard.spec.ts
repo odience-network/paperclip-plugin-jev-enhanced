@@ -3,7 +3,7 @@ import type { Fetch } from "@typesafe-ai/sdk";
 import { JevClient } from "../src/jev/client.js";
 import { jevConfigSchema, type JevConfig } from "../src/config.js";
 import type { LedgerDb } from "../src/ledger/db.js";
-import { runRails, type RailDeps, type InteractionsReader } from "../src/guard/rails.js";
+import { runRails, overrideStampKey, type RailDeps, type InteractionsReader } from "../src/guard/rails.js";
 import type { LoopGuardState } from "../src/guard/loopGuard.js";
 import { effectiveDecision } from "../src/guard/mode.js";
 import { evaluateGuard, type EvaluateGuardDeps } from "../src/guard/evaluate.js";
@@ -58,7 +58,17 @@ function createFakeState(): LoopGuardState {
 }
 
 function createFakeInteractions(
-  interactions: Array<{ id: string; companyId: string; issueId: string; kind: string; status: string; resolvedAt?: string | null }>,
+  interactions: Array<{
+    id: string;
+    companyId: string;
+    issueId: string;
+    kind: string;
+    status: string;
+    resolvedAt?: string | null;
+    resolvedByUserId?: string | null;
+    resolvedByAgentId?: string | null;
+    payload?: unknown;
+  }>,
 ): InteractionsReader {
   return {
     async listInteractions(issueId, companyId) {
@@ -80,7 +90,7 @@ describe("runRails", () => {
     const config = baseConfig({ guardRails: { killSwitch: "deny-all" } as never }).guardRails;
     const deps: RailDeps = { state: createFakeState(), interactions: createFakeInteractions([]) };
     const verdict = await runRails(baseRequest({ toolName: "Read" }), "company_1", config, deps);
-    expect(verdict).toEqual({ decision: "deny", reason: "kill-switch-deny-all" });
+    expect(verdict).toEqual({ decision: "deny", reason: "kill-switch-deny-all", bypassMode: true });
   });
 
   it("bypasses everything on the kill switch allow-all override", async () => {
@@ -96,7 +106,7 @@ describe("runRails", () => {
     const config = baseConfig({ guardRails: { blockedTools: ["Bash"] } as never }).guardRails;
     const deps: RailDeps = { state: createFakeState(), interactions: createFakeInteractions([]) };
     const verdict = await runRails(baseRequest({ toolName: "Bash" }), "company_1", config, deps);
-    expect(verdict).toEqual({ decision: "deny", reason: "tool-blocklisted" });
+    expect(verdict).toEqual({ decision: "deny", reason: "tool-blocklisted", bypassMode: true });
   });
 
   it("allows an operator-allowlisted tool without calling Jev", async () => {
@@ -130,7 +140,7 @@ describe("runRails", () => {
     expect(await runRails(request, "company_1", config, deps)).toBeNull();
     expect(await runRails(request, "company_1", config, deps)).toBeNull();
     const verdict = await runRails(request, "company_1", config, deps);
-    expect(verdict).toEqual({ decision: "ask", reason: "loop-detected" });
+    expect(verdict).toEqual({ decision: "ask", reason: "loop-detected", bypassMode: true });
   });
 
   it("the loop guard never forces allow — only ask or deny", async () => {
@@ -142,33 +152,133 @@ describe("runRails", () => {
 
     await runRails(request, "company_1", config, deps);
     const verdict = await runRails(request, "company_1", config, deps);
-    expect(verdict).toEqual({ decision: "deny", reason: "loop-detected" });
+    expect(verdict).toEqual({ decision: "deny", reason: "loop-detected", bypassMode: true });
   });
 
   describe("override stamp", () => {
     const config = baseConfig().guardRails;
+    const TOOL_NAME = "Edit";
+    const TOOL_INPUT_HASH = "hash-1";
+    const target = { type: "custom", key: overrideStampKey(TOOL_NAME, TOOL_INPUT_HASH) };
 
-    it("accepts a fresh, accepted request_confirmation interaction for the right company/issue", async () => {
+    function overrideRequest(overrides: Partial<GuardEvaluateRequest> = {}): GuardEvaluateRequest {
+      return baseRequest({
+        toolName: TOOL_NAME,
+        toolInputHash: TOOL_INPUT_HASH,
+        issueId: "issue_1",
+        overrideInteractionId: "int_1",
+        ...overrides,
+      });
+    }
+
+    it("accepts a fresh, accepted, human-resolved request_confirmation interaction bound to this exact call", async () => {
       const resolvedAt = new Date().toISOString();
       const deps: RailDeps = {
         state: createFakeState(),
         interactions: createFakeInteractions([
-          { id: "int_1", companyId: "company_1", issueId: "issue_1", kind: "request_confirmation", status: "accepted", resolvedAt },
+          {
+            id: "int_1",
+            companyId: "company_1",
+            issueId: "issue_1",
+            kind: "request_confirmation",
+            status: "accepted",
+            resolvedAt,
+            resolvedByUserId: "user_1",
+            payload: { target },
+          },
         ]),
       };
-      const request = baseRequest({ toolName: "Edit", issueId: "issue_1", overrideInteractionId: "int_1" });
-      const verdict = await runRails(request, "company_1", config, deps);
+      const verdict = await runRails(overrideRequest(), "company_1", config, deps);
       expect(verdict).toEqual({ decision: "allow", reason: "human-override-stamp" });
+    });
+
+    it("rejects an override stamp resolved by an agent, even if resolvedByUserId is also set", async () => {
+      const deps: RailDeps = {
+        state: createFakeState(),
+        interactions: createFakeInteractions([
+          {
+            id: "int_1",
+            companyId: "company_1",
+            issueId: "issue_1",
+            kind: "request_confirmation",
+            status: "accepted",
+            resolvedAt: new Date().toISOString(),
+            resolvedByUserId: "user_1",
+            resolvedByAgentId: "agent_1",
+            payload: { target },
+          },
+        ]),
+      };
+      const verdict = await runRails(overrideRequest(), "company_1", config, deps);
+      expect(verdict).toBeNull();
+    });
+
+    it("rejects an override stamp with no human resolver at all", async () => {
+      const deps: RailDeps = {
+        state: createFakeState(),
+        interactions: createFakeInteractions([
+          {
+            id: "int_1",
+            companyId: "company_1",
+            issueId: "issue_1",
+            kind: "request_confirmation",
+            status: "accepted",
+            resolvedAt: new Date().toISOString(),
+            payload: { target },
+          },
+        ]),
+      };
+      const verdict = await runRails(overrideRequest(), "company_1", config, deps);
+      expect(verdict).toBeNull();
+    });
+
+    it("rejects an override stamp bound to a different tool call (toolInputHash mismatch)", async () => {
+      const deps: RailDeps = {
+        state: createFakeState(),
+        interactions: createFakeInteractions([
+          {
+            id: "int_1",
+            companyId: "company_1",
+            issueId: "issue_1",
+            kind: "request_confirmation",
+            status: "accepted",
+            resolvedAt: new Date().toISOString(),
+            resolvedByUserId: "user_1",
+            payload: { target: { type: "custom", key: overrideStampKey(TOOL_NAME, "a-different-hash") } },
+          },
+        ]),
+      };
+      const verdict = await runRails(overrideRequest(), "company_1", config, deps);
+      expect(verdict).toBeNull();
+    });
+
+    it("rejects an override stamp with no target binding at all", async () => {
+      const deps: RailDeps = {
+        state: createFakeState(),
+        interactions: createFakeInteractions([
+          {
+            id: "int_1",
+            companyId: "company_1",
+            issueId: "issue_1",
+            kind: "request_confirmation",
+            status: "accepted",
+            resolvedAt: new Date().toISOString(),
+            resolvedByUserId: "user_1",
+          },
+        ]),
+      };
+      const verdict = await runRails(overrideRequest(), "company_1", config, deps);
+      expect(verdict).toBeNull();
     });
 
     it("ignores an override stamp with no issueId on the request", async () => {
       const deps: RailDeps = {
         state: createFakeState(),
         interactions: createFakeInteractions([
-          { id: "int_1", companyId: "company_1", issueId: "issue_1", kind: "request_confirmation", status: "accepted", resolvedAt: new Date().toISOString() },
+          { id: "int_1", companyId: "company_1", issueId: "issue_1", kind: "request_confirmation", status: "accepted", resolvedAt: new Date().toISOString(), resolvedByUserId: "user_1", payload: { target } },
         ]),
       };
-      const request = baseRequest({ toolName: "Edit", overrideInteractionId: "int_1" });
+      const request = overrideRequest({ issueId: undefined });
       const verdict = await runRails(request, "company_1", config, deps);
       expect(verdict).toBeNull();
     });
@@ -177,11 +287,10 @@ describe("runRails", () => {
       const deps: RailDeps = {
         state: createFakeState(),
         interactions: createFakeInteractions([
-          { id: "int_1", companyId: "company_other", issueId: "issue_1", kind: "request_confirmation", status: "accepted", resolvedAt: new Date().toISOString() },
+          { id: "int_1", companyId: "company_other", issueId: "issue_1", kind: "request_confirmation", status: "accepted", resolvedAt: new Date().toISOString(), resolvedByUserId: "user_1", payload: { target } },
         ]),
       };
-      const request = baseRequest({ toolName: "Edit", issueId: "issue_1", overrideInteractionId: "int_1" });
-      const verdict = await runRails(request, "company_1", config, deps);
+      const verdict = await runRails(overrideRequest(), "company_1", config, deps);
       expect(verdict).toBeNull();
     });
 
@@ -189,11 +298,10 @@ describe("runRails", () => {
       const deps: RailDeps = {
         state: createFakeState(),
         interactions: createFakeInteractions([
-          { id: "int_1", companyId: "company_1", issueId: "issue_1", kind: "request_confirmation", status: "pending", resolvedAt: null },
+          { id: "int_1", companyId: "company_1", issueId: "issue_1", kind: "request_confirmation", status: "pending", resolvedAt: null, resolvedByUserId: "user_1", payload: { target } },
         ]),
       };
-      const request = baseRequest({ toolName: "Edit", issueId: "issue_1", overrideInteractionId: "int_1" });
-      const verdict = await runRails(request, "company_1", config, deps);
+      const verdict = await runRails(overrideRequest(), "company_1", config, deps);
       expect(verdict).toBeNull();
     });
 
@@ -201,11 +309,10 @@ describe("runRails", () => {
       const deps: RailDeps = {
         state: createFakeState(),
         interactions: createFakeInteractions([
-          { id: "int_1", companyId: "company_1", issueId: "issue_1", kind: "hire_agent", status: "accepted", resolvedAt: new Date().toISOString() },
+          { id: "int_1", companyId: "company_1", issueId: "issue_1", kind: "hire_agent", status: "accepted", resolvedAt: new Date().toISOString(), resolvedByUserId: "user_1", payload: { target } },
         ]),
       };
-      const request = baseRequest({ toolName: "Edit", issueId: "issue_1", overrideInteractionId: "int_1" });
-      const verdict = await runRails(request, "company_1", config, deps);
+      const verdict = await runRails(overrideRequest(), "company_1", config, deps);
       expect(verdict).toBeNull();
     });
 
@@ -215,13 +322,36 @@ describe("runRails", () => {
       const deps: RailDeps = {
         state: createFakeState(),
         interactions: createFakeInteractions([
-          { id: "int_1", companyId: "company_1", issueId: "issue_1", kind: "request_confirmation", status: "accepted", resolvedAt },
+          { id: "int_1", companyId: "company_1", issueId: "issue_1", kind: "request_confirmation", status: "accepted", resolvedAt, resolvedByUserId: "user_1", payload: { target } },
         ]),
       };
-      const request = baseRequest({ toolName: "Edit", issueId: "issue_1", overrideInteractionId: "int_1" });
-      const verdict = await runRails(request, "company_1", staleConfig, deps);
+      const verdict = await runRails(overrideRequest(), "company_1", staleConfig, deps);
       expect(verdict).toBeNull();
     });
+  });
+
+  it("checks the tool blocklist before the override stamp, so a blocked tool can't be unblocked by a human override", async () => {
+    const toolName = "Bash";
+    const toolInputHash = "hash-blocked";
+    const blockedConfig = baseConfig({ guardRails: { blockedTools: [toolName] } as never }).guardRails;
+    const deps: RailDeps = {
+      state: createFakeState(),
+      interactions: createFakeInteractions([
+        {
+          id: "int_1",
+          companyId: "company_1",
+          issueId: "issue_1",
+          kind: "request_confirmation",
+          status: "accepted",
+          resolvedAt: new Date().toISOString(),
+          resolvedByUserId: "user_1",
+          payload: { target: { type: "custom", key: overrideStampKey(toolName, toolInputHash) } },
+        },
+      ]),
+    };
+    const request = baseRequest({ toolName, toolInputHash, issueId: "issue_1", overrideInteractionId: "int_1" });
+    const verdict = await runRails(request, "company_1", blockedConfig, deps);
+    expect(verdict).toEqual({ decision: "deny", reason: "tool-blocklisted", bypassMode: true });
   });
 });
 
@@ -425,6 +555,81 @@ describe("evaluateGuard", () => {
     const result = await evaluateGuard(baseRequest({ toolName: "Edit" }), d);
     expect(result.decision).toBe("allow");
     expect(result.intendedDecision).toBe("deny");
+  });
+
+  it("the kill switch deny-all is NOT downgraded to allow by shadow mode (bypassMode rails ignore the policy's mode)", async () => {
+    const fetchImpl = vi.fn<Fetch>(async () => jsonResponse({}));
+    const d = deps(
+      {
+        config: baseConfig({
+          guardRails: { killSwitch: "deny-all" } as never,
+          policies: { "guard-pre": { enabled: true, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {} } },
+        }),
+      },
+      fetchImpl,
+    );
+    const result = await evaluateGuard(baseRequest({ toolName: "Edit" }), d);
+    expect(result.decision).toBe("deny");
+    expect(result.intendedDecision).toBe("deny");
+    expect(result.rail).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("the kill switch deny-all forces ask (never deny) for Stop, which has no deny in its decision space", async () => {
+    const d = deps({
+      config: baseConfig({
+        guardRails: { killSwitch: "deny-all" } as never,
+        policies: { "guard-stop": { enabled: true, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {} } },
+      }),
+    });
+    const result = await evaluateGuard(baseRequest({ hookKind: "Stop", toolName: undefined }), d);
+    expect(result.decision).toBe("ask");
+  });
+
+  it("a blocklisted tool is NOT downgraded to allow by shadow mode", async () => {
+    const fetchImpl = vi.fn<Fetch>(async () => jsonResponse({}));
+    const d = deps(
+      {
+        config: baseConfig({
+          guardRails: { blockedTools: ["Bash"] } as never,
+          policies: { "guard-pre": { enabled: true, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {} } },
+        }),
+      },
+      fetchImpl,
+    );
+    const result = await evaluateGuard(baseRequest({ toolName: "Bash" }), d);
+    expect(result.decision).toBe("deny");
+    expect(result.rail).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("a tripped loop guard is NOT downgraded to allow by shadow mode", async () => {
+    const fetchImpl = vi.fn<Fetch>(async () => jsonResponse({}));
+    const config = baseConfig({
+      guardRails: { loopGuard: { threshold: 2, windowSize: 8, action: "deny" } } as never,
+      policies: { "guard-pre": { enabled: true, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {} } },
+    });
+    const state = createFakeState();
+    const request = baseRequest({ toolName: "Edit", toolInputHash: "loop-hash" });
+    const d = deps({ config, rails: { state, interactions: createFakeInteractions([]) } }, fetchImpl);
+
+    await evaluateGuard(request, d);
+    const result = await evaluateGuard(request, d);
+    expect(result.decision).toBe("deny");
+    expect(result.rail).toBe(true);
+  });
+
+  it("a rail bypassMode decision is recorded in the ledger as blocked, not observed, even in shadow mode", async () => {
+    const d = deps({
+      config: baseConfig({
+        guardRails: { killSwitch: "deny-all" } as never,
+        policies: { "guard-pre": { enabled: true, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {} } },
+      }),
+    });
+    await evaluateGuard(baseRequest({ toolName: "Edit" }), d);
+    const rows = [...(d.db as ReturnType<typeof createFakeDb>).rows.values()];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.outcome).toBe("blocked");
   });
 
   it("fails open to allow on a Jev error when the policy is not enforce", async () => {

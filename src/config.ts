@@ -60,12 +60,17 @@ export type LoopGuardConfig = z.infer<typeof loopGuardConfigSchema>;
 
 const guardRailsConfigSchema = z.object({
   /**
-   * Emergency override, independent of any policy's `mode`. `"deny-all"`
-   * fails every PreToolUse/PostToolUse call closed without calling Jev —
-   * for an active incident. `"allow-all"` bypasses the guard entirely
-   * (including rails) — only for recovering from a Jev/host outage that is
-   * itself blocking legitimate work; document the reason in config history
-   * before flipping it.
+   * Emergency override, independent of any policy's `mode` — a rail verdict
+   * produced by this switch bypasses `effectiveDecision` entirely, so even a
+   * `shadow`-mode policy (the shipped default) enforces it for real. Applies
+   * to every hook kind, not just PreToolUse/PostToolUse: `"deny-all"` fails
+   * PreToolUse/PostToolUse closed to `deny` for an active incident, and
+   * fails `Stop` to `ask` instead (`Stop` has no `deny` in its decision
+   * space — see `src/guard/stop.ts` — so there is nothing stronger than
+   * "flag for human review" to force there). `"allow-all"` bypasses the
+   * guard entirely (including rails) — only for recovering from a Jev/host
+   * outage that is itself blocking legitimate work; document the reason in
+   * config history before flipping it.
    */
   killSwitch: z.enum(["none", "allow-all", "deny-all"]).default("none"),
   readOnlyTools: z.array(z.string()).default(DEFAULT_READ_ONLY_TOOLS),
@@ -80,10 +85,14 @@ const guardRailsConfigSchema = z.object({
    * confirmation can't be replayed indefinitely across unrelated later calls. */
   overrideFreshnessMs: z.number().int().positive().default(900_000),
   /** Wall-clock budget for the Jev call inside `guard/evaluate`. On timeout,
-   * Pre/Post fail open to `allow` and Stop fails open to `allow` UNLESS the
-   * deterministic rails already escalated this call toward a `deny`-capable
-   * path, in which case it fails closed to `ask` (Pre/Post) — see
-   * `src/guard/evaluate.ts`. */
+   * `fallbackDecision(hookKind, mode)` decides: any mode other than
+   * `enforce` fails open to `allow` (a `shadow`/`suggest` policy can't deny
+   * anyway), `Stop` always fails open to `allow` (it has no `deny` in its
+   * decision space), and only an `enforce`-mode PreToolUse/PostToolUse call
+   * fails closed, to `ask` — never a `deny` manufactured purely from a
+   * timeout. This only governs the Jev call itself; a `bypassMode` rail
+   * (kill switch, blocklist, loop guard) runs before the Jev call and is
+   * unaffected by this budget — see `src/guard/evaluate.ts`. */
   timeBudgetMs: z.number().int().positive().default(1500),
   rateLimit: guardRateLimitConfigSchema.default(guardRateLimitConfigSchema.parse({})),
 });
