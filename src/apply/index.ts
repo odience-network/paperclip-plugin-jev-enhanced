@@ -1,3 +1,4 @@
+import type { CommentTriageState } from "../policies/comment-triage.js";
 import type { FieldDecision, PolicyContext, PolicyVerdict } from "../policies/types.js";
 
 export interface ApplyInput {
@@ -22,7 +23,12 @@ export interface ApplyDeps {
   updateIssue?: (input: { issueId: string; companyId: string; patch: Record<string, unknown> }) => Promise<void>;
   /** Wakes the issue's current assignee. Never chooses or changes who the
    * assignee is — that stays `assigneeUserId`/`assigneeAgentId`'s business. */
-  requestWakeup?: (input: { issueId: string; companyId: string; reason: string }) => Promise<void>;
+  requestWakeup?: (input: {
+    issueId: string;
+    companyId: string;
+    reason: string;
+    idempotencyKey?: string;
+  }) => Promise<void>;
   /** Posts a plugin-authored comment. Only ever used for structured,
    * synthesized text describing a policy's own fields/flags — never raw
    * issue or comment content, which stays on the data side of the
@@ -127,10 +133,12 @@ async function applyCommentTriage(input: ApplyInput, deps: ApplyDeps): Promise<v
     });
     return;
   }
+  const commentId = (input.state as CommentTriageState | undefined)?.commentId;
   await deps.requestWakeup({
     issueId,
     companyId: input.ctx.companyId,
     reason: `jev.comment-triage.${input.verdict.verdict}`,
+    idempotencyKey: commentId ? `jev:comment-triage:${commentId}` : undefined,
   });
   deps.log("jev.apply.comment-triage", { issueId, verdict: input.verdict.verdict });
 }

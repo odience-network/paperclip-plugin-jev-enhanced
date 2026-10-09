@@ -102,8 +102,8 @@ function buildApplyDeps(ctx: PluginContext): ApplyDeps {
     updateIssue: async ({ issueId, companyId, patch }) => {
       await ctx.issues.update(issueId, patch, companyId);
     },
-    requestWakeup: async ({ issueId, companyId, reason }) => {
-      await ctx.issues.requestWakeup(issueId, companyId, { reason });
+    requestWakeup: async ({ issueId, companyId, reason, idempotencyKey }) => {
+      await ctx.issues.requestWakeup(issueId, companyId, { reason, idempotencyKey });
     },
     createComment: async ({ issueId, companyId, body }) => {
       // No `authorAgentId`/`actorUserId` — resolves to `authorType: "system"`,
