@@ -97,6 +97,18 @@ describe("evaluateGuard transport fallback", () => {
     expect(result.decision).toBe("ask");
     expect(result.reason).toBe("off-task");
   });
+
+  it("includes env.companyId in the outgoing request body, even when the caller's body omits it", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ decision: "allow", reason: "ok", confidence: 1, latencyMs: 1, rail: false, intendedDecision: "allow" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await evaluateGuard(baseEnv, { hookKind: "PreToolUse", toolName: "Bash" });
+    const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sentBody.companyId).toBe("company_1");
+  });
 });
 
 describe("lastAssistantMessage", () => {

@@ -100,7 +100,12 @@ export async function evaluateGuard(env, body) {
         "content-type": "application/json",
         authorization: `Bearer ${env.apiKey}`,
       },
-      body: JSON.stringify({ ...body, runId: env.runId, issueId: body.issueId ?? env.issueId }),
+      body: JSON.stringify({
+        ...body,
+        companyId: env.companyId,
+        runId: env.runId,
+        issueId: body.issueId ?? env.issueId,
+      }),
       signal: controller.signal,
     });
     const result = await res.json().catch(() => null);
