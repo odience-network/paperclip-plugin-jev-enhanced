@@ -31,6 +31,11 @@ src/
     semaphore.ts        Bounded concurrency primitive (default: 6).
     types.ts           Zod schemas for the `typesafe_ask` request/response
                       wire shape (PR #13713) plus `JevAnswer`.
+    errors.ts           `classifyError()`: maps any thrown error (budget,
+                      missing key, validation, provider) to a short machine
+                      code — never the error's own message — for both the
+                      ledger's `reason` column and the tool/route error
+                      contract.
   ledger/
     db.ts              `LedgerDb` interface — matches `ctx.db` exactly so the
                       SDK's database client can be passed through unchanged.
@@ -51,10 +56,37 @@ src/
     issue-triage.ts     `issue-triage` policy: routes a new/updated issue to
                       an owner, priority, issue type, etc. See "Policies >
                       issue-triage" below for the full field mapping.
+    ask.ts              `ask` policy backing the `jev-ask` tool/route: runs a
+                      caller-supplied state/questions pair through the
+                      standard pipeline without interpreting the answers —
+                      every field is `observe`. See "Policies > ask" below.
+    classify-task.ts    `classify-task` policy backing `jev-classify-task`:
+                      work kind / model tier / review depth plus a per-skill
+                      load recommendation. See "Policies > classify-task".
+    verify.ts           `verify` policy backing `jev-verify`: claim vs.
+                      evidence → `supports`/`contradicts`/`says_nothing`. See
+                      "Policies > verify" below.
+    rerank.ts           `rerank` policy backing `jev-rerank`: per-candidate
+                      relevance/contains-answer/injection noul questions. See
+                      "Policies > rerank" below.
     run.ts              `runPolicy()`: orchestrates one policy evaluation —
                       pre-filter, ledger-write-before-call, ask, decide,
                       ledger-complete, conditional apply/suggest.
     index.ts            Policy registry (`policies[name]`).
+  tools/
+    schemas.ts           Zod schemas for every tool's params and the
+                      `typesafe_ask` question/answer wire shapes shared with
+                      `jev/types.ts`; the single source of request validation
+                      for both the MCP tools and the `/tools/*` routes.
+    runTool.ts           `runDecisionTool()`: the shared MCP-tool/API-route
+                      dispatch used by `jev-ask`/`jev-classify-task`/
+                      `jev-verify`/`jev-rerank` — validates params against
+                      the caller's zod schema (`schemas.ts`), calls
+                      `runPolicy()`, and maps any failure to a short machine
+                      code via `jev/errors.ts`'s `classifyError`, so a tool
+                      handler never throws. `statusForToolError()` maps that
+                      same code to the HTTP status every `tool-*` API route
+                      returns for it.
   apply/
     index.ts            Side-effecting handlers invoked only when a policy's
                       mode is `enforce`. Never called in `shadow`/`suggest`.
@@ -279,6 +311,69 @@ See `eval/reports/issue-triage.md` for the current accuracy/agreement/ECE/
 threshold-sweep numbers and the recommended `suggest`-mode thresholds (from a
 synthetic dataset — see that report's "Scope note").
 
+### Policies > `ask`, `classify-task`, `verify`, `rerank`
+
+These four policies back the `jev-ask`/`jev-classify-task`/`jev-verify`/
+`jev-rerank` tools and their `tool-*` API routes (see `README.md`'s "Tools"
+section for request/response examples). All four are dispatched through the
+shared `runDecisionTool()` (`src/tools/runTool.ts`), default to `shadow`
+mode, and — unlike `issue-triage` — every field they ever decide is
+`action: "observe"`: none of them has a native `Issue` field to patch, so
+there is no `apply`/`suggest` path to reach. The ledger row is their only
+effect.
+
+#### `ask` (`src/policies/ask.ts`)
+
+Backs the generic `jev-ask` tool. The caller supplies both `state` and
+`questions` directly (validated against the shared `jevQuestionSchema` in
+`src/tools/schemas.ts` before this policy ever runs); `decide()` just
+echoes each answer back as an observe-only field (`noul >= 0.5` → boolean,
+`choice`/`score` passed through as-is) and reports the minimum
+confidence/margin across all answers. `preFilter` rejects an empty
+`questions` map. Verdict: `"answered"` once at least one field is present,
+`"no-answer"` otherwise.
+
+#### `classify-task` (`src/policies/classify-task.ts`)
+
+Backs `jev-classify-task`. Three independent choice questions plus one noul
+per candidate skill:
+
+| Question | Type | Catalog |
+|---|---|---|
+| `workKind` | choice | `feature`/`bug`/`refactor`/`chore`/`docs`/`research` |
+| `modelTier` | choice | `fast`/`standard`/`strong` |
+| `reviewDepth` | choice | `light`/`standard`/`thorough` |
+| `loadSkill:<id>` | noul, one per `candidateSkills` entry | — |
+
+`preFilter` rejects a blank `description`. Verdict is `"work-kind:<value>"`
+(e.g. `"work-kind:bug"`) taken from the `workKind` field's confidence/margin,
+or `"no-answer"` if `workKind` is missing or the wrong answer type.
+
+#### `verify` (`src/policies/verify.ts`)
+
+Backs `jev-verify`. One choice question — "does `evidence` support,
+contradict, or say nothing about `claim`" — over
+`VERIFY_RELATION_CATALOG = ["supports", "contradicts", "says_nothing"]`.
+`preFilter` rejects a blank `claim` or `evidence`. The verdict *is* the
+relation itself (`"supports"`/`"contradicts"`/`"says_nothing"`), or
+`"no-answer"` if the `relation` answer is missing or not a choice answer.
+The question's own instructions call out the completion-claim case
+explicitly: a "this is done" claim is only `supports` when the evidence is
+an actual passed test/check, not the claim restated in different words.
+
+#### `rerank` (`src/policies/rerank.ts`)
+
+Backs `jev-rerank`. Three noul questions per candidate —
+`relevant:<id>`, `containsAnswer:<id>`, `injection:<id>` — scored
+independently. `preFilter` rejects an empty `query` or an empty
+`candidates` list. Verdict is `"ranked"` once at least one candidate has at
+least one valid answer, or `"no-answer"` otherwise; `decide()` reports the
+minimum confidence/margin across all per-candidate fields. The tool never
+reorders `candidates` itself — the caller reranks using the returned
+per-candidate booleans, and should treat a `true` `injection:<id>` as a
+reason to discount that candidate's `containsAnswer:<id>` regardless of its
+own confidence.
+
 ## Eval runner
 
 `pnpm eval --policy <name>` (`eval/run.ts`) loads a JSONL fixture
@@ -346,6 +441,12 @@ the namespace per the host's normal plugin-uninstall data-retention policy.
   leaves the plugin, ahead of canonicalization's hash and the provider call.
 - Every policy defaults to `shadow` mode; `apply/` (the only place with side
   effects) is unreachable except in `enforce` mode.
+- `ask`/`classify-task`/`verify`/`rerank` (the `jev-*` decision tools and
+  their `tool-*` API routes) never reach `apply/`/`suggest/` at all — every
+  field they decide is `action: "observe"`, since none of them maps to a
+  native `Issue` field. They are observation/advisory tools, not routing
+  policies, and are documented as such (including what Jev cannot do — no
+  generation, not injection-aware) in the `jev-decisions` company skill.
 - Jev must never override a human-set `assigneeUserId`, and only overrides
   other human-set fields (priority/status) when an operator has explicitly
   chosen `always_auto` for that policy — see `respectExistingFields` in
