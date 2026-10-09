@@ -135,6 +135,27 @@ describe("browserActionPolicy sensitivity gating", () => {
     );
     expect(verdict).toMatchObject({ verdict: "blocked", reason: "no-target-resolved" });
   });
+
+  it("gates on missing target before sensitivity for a sensitive mutating action with no resolved target", () => {
+    // Regression for a targetless confirmation card: a sensitive `click`
+    // with no resolved target must block as `no-target-resolved`, not
+    // `sensitive-awaiting-confirmation` — otherwise a human accepting the
+    // confirmation card would unblock an action with `targetIndex: null`.
+    const verdict = browserActionPolicy.decide(
+      {
+        action: {
+          type: "choice",
+          choice: "click",
+          confidence: 0.9,
+          probabilities: { click: 0.9, type: 0.02, select: 0.02, scroll: 0.02, wait: 0.02, done: 0.02 },
+        },
+        sensitivity: { type: "noul", noul: 0.9 },
+        target_0: { type: "noul", noul: 0.2 },
+      },
+      ctx({ target: 0.5, sensitivity: 0.5 }),
+    );
+    expect(verdict).toMatchObject({ verdict: "blocked", reason: "no-target-resolved" });
+  });
 });
 
 describe("resolveTargetIndex", () => {

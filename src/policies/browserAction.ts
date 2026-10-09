@@ -161,16 +161,19 @@ export const browserActionPolicy: Policy<BrowserActionState> = {
       return { verdict: "blocked", confidence: actionAnswer.confidence, margin, reason: "low-confidence" };
     }
 
-    const sensitivityThreshold = ctx.config.thresholds.sensitivity ?? 0.5;
-    if (MUTATING_ACTIONS.has(action) && resolveSensitive(answers, sensitivityThreshold)) {
-      return { verdict: "blocked", confidence: actionAnswer.confidence, margin, reason: "sensitive-awaiting-confirmation" };
-    }
-
+    // Target resolution gates before sensitivity: a mutating action with no
+    // resolved target must never reach the confirm-mutation loop (a human
+    // accepting that card would unblock an action with `targetIndex: null`).
     if (TARGETED_ACTIONS.has(action)) {
       const targetThreshold = ctx.config.thresholds.target ?? 0.5;
       if (resolveTargetIndex(answers, targetThreshold) === null) {
         return { verdict: "blocked", confidence: actionAnswer.confidence, margin, reason: "no-target-resolved" };
       }
+    }
+
+    const sensitivityThreshold = ctx.config.thresholds.sensitivity ?? 0.5;
+    if (MUTATING_ACTIONS.has(action) && resolveSensitive(answers, sensitivityThreshold)) {
+      return { verdict: "blocked", confidence: actionAnswer.confidence, margin, reason: "sensitive-awaiting-confirmation" };
     }
 
     return { verdict: action, confidence: actionAnswer.confidence, margin, reason: "action-above-threshold" };

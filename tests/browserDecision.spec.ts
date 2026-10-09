@@ -494,6 +494,50 @@ describe("decideBrowserAction confirm-mutation workflow", () => {
     });
   });
 
+  it("never opens a confirmation card for a sensitive action with no resolved target", async () => {
+    // Regression: `decide()` used to gate sensitivity before the target
+    // check, so a sensitive click with no resolved target still opened a
+    // confirmation card — accepting it would have unblocked `targetIndex:
+    // null`. It must block as `no-target-resolved` instead, and never call
+    // either confirmation hook.
+    const fetchImpl = vi.fn<Fetch>(async () =>
+      jsonResponse(
+        clickAnswers({
+          sensitivity: { type: "noul", noul: 0.9 },
+          target_0: { type: "noul", noul: 0.1 },
+          target_1: { type: "noul", noul: 0.2 },
+        }),
+      ),
+    );
+    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const findConfirmation = vi.fn(async () => null);
+    const requestConfirmation = vi.fn(async () => ({ interactionId: "interaction_1" }));
+
+    const result = await decideBrowserAction(
+      { issueId: "issue_1", goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
+      {
+        client,
+        db: createFakeDb(),
+        config: suggestConfig(),
+        companyId: "company_1",
+        log: vi.fn(),
+        findConfirmation,
+        requestConfirmation,
+      },
+    );
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      action: "blocked",
+      targetIndex: null,
+      reason: "no-target-resolved",
+      requiresConfirmation: false,
+      confirmationInteractionId: null,
+    });
+    expect(findConfirmation).not.toHaveBeenCalled();
+    expect(requestConfirmation).not.toHaveBeenCalled();
+  });
+
   it("falls back to 'not found' (and still gates) when findConfirmation throws", async () => {
     const fetchImpl = sensitiveFetch();
     const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
