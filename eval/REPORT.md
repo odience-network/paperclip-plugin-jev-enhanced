@@ -18,7 +18,9 @@ pnpm eval --policy guard-stop
 
 Once a company has a bound provider key, this should be re-run as a real
 shadow-mode corpus (`mode: "shadow"` across all three guard policies) against
-actual tool-call traffic and the numbers below superseded.
+actual tool-call traffic and the numbers below superseded. Tracked as a
+follow-up child issue: **ODIAA-2456** ("JevGuard: live shadow-mode re-run
+once board installs the plugin and binds the provider key").
 
 ## Results
 
@@ -42,8 +44,7 @@ It is 0% for all three policies on this corpus; given the corpus is
 synthetic (see below) this should be read as "the implemented `decide()`
 logic doesn't misfire on its own designed-benign scenarios," not as
 "operators will see a 0% false-positive rate in production" — the live
-shadow re-run (tracked in a follow-up issue, see below) is what will actually
-answer that.
+shadow re-run (ODIAA-2456, see above) is what will actually answer that.
 
 **"Avg latency (synthetic)" is not a measured number.** It is copied through
 from each fixture row's hand-authored `latencyMs` field
