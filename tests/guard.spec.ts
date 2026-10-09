@@ -246,7 +246,7 @@ describe("effectiveDecision", () => {
 });
 
 describe("guardPrePolicy.decide", () => {
-  const ctx = { companyId: "company_1", config: { enabled: true, mode: "shadow" as const, thresholds: {} } };
+  const ctx = { companyId: "company_1", config: { enabled: true, mode: "shadow" as const, thresholds: {}, alwaysAuto: false, options: {} } };
 
   function answers(overrides: Record<string, unknown> = {}) {
     return {
@@ -315,7 +315,7 @@ describe("guardPrePolicy.decide", () => {
 });
 
 describe("guardPostPolicy.decide", () => {
-  const ctx = { companyId: "company_1", config: { enabled: true, mode: "shadow" as const, thresholds: {} } };
+  const ctx = { companyId: "company_1", config: { enabled: true, mode: "shadow" as const, thresholds: {}, alwaysAuto: false, options: {} } };
 
   it("denies clear prompt injection in tool output", () => {
     const verdict = guardPostPolicy.decide(
@@ -335,7 +335,7 @@ describe("guardPostPolicy.decide", () => {
 });
 
 describe("guardStopPolicy.decide", () => {
-  const ctx = { companyId: "company_1", config: { enabled: true, mode: "shadow" as const, thresholds: {} } };
+  const ctx = { companyId: "company_1", config: { enabled: true, mode: "shadow" as const, thresholds: {}, alwaysAuto: false, options: {} } };
 
   it("never denies — only allow or ask", () => {
     const unsupported = guardStopPolicy.decide({ completion_supported: { type: "noul", noul: 0.05 } }, ctx);
@@ -385,7 +385,7 @@ describe("evaluateGuard", () => {
       {
         config: baseConfig({
           guardRails: { blockedTools: ["Bash"] } as never,
-          policies: { "guard-pre": { enabled: true, mode: "enforce", thresholds: {} } },
+          policies: { "guard-pre": { enabled: true, mode: "enforce", thresholds: {}, alwaysAuto: false, options: {} } },
         }),
       },
       fetchImpl,
@@ -428,7 +428,7 @@ describe("evaluateGuard", () => {
   });
 
   it("fails open to allow on a Jev error when the policy is not enforce", async () => {
-    const d = deps({ config: baseConfig({ policies: { "guard-pre": { enabled: true, mode: "suggest", thresholds: {} } } }) }, async () =>
+    const d = deps({ config: baseConfig({ policies: { "guard-pre": { enabled: true, mode: "suggest", thresholds: {}, alwaysAuto: false, options: {} } } }) }, async () =>
       jsonResponse({ error: "boom" }, { status: 500 }));
     const result = await evaluateGuard(baseRequest({ toolName: "Edit" }), d);
     expect(result.decision).toBe("allow");
@@ -436,7 +436,7 @@ describe("evaluateGuard", () => {
   });
 
   it("fails closed to ask (never deny) on a Jev error when the policy is enforce", async () => {
-    const d = deps({ config: baseConfig({ policies: { "guard-pre": { enabled: true, mode: "enforce", thresholds: {} } } }) }, async () =>
+    const d = deps({ config: baseConfig({ policies: { "guard-pre": { enabled: true, mode: "enforce", thresholds: {}, alwaysAuto: false, options: {} } } }) }, async () =>
       jsonResponse({ error: "boom" }, { status: 500 }));
     const result = await evaluateGuard(baseRequest({ toolName: "Edit" }), d);
     expect(result.decision).toBe("ask");
@@ -444,7 +444,7 @@ describe("evaluateGuard", () => {
 
   it("Stop always fails open to allow, even in enforce mode, since it has no deny", async () => {
     const d = deps(
-      { config: baseConfig({ policies: { "guard-stop": { enabled: true, mode: "enforce", thresholds: {} } } }) },
+      { config: baseConfig({ policies: { "guard-stop": { enabled: true, mode: "enforce", thresholds: {}, alwaysAuto: false, options: {} } } }) },
       async () => jsonResponse({ error: "boom" }, { status: 500 }),
     );
     const result = await evaluateGuard(baseRequest({ hookKind: "Stop", excerpt: "done" }), d);
@@ -453,7 +453,7 @@ describe("evaluateGuard", () => {
 
   it("honors the time budget: times out to the fallback decision rather than waiting on a slow Jev call", async () => {
     const d = deps(
-      { config: baseConfig({ guardRails: { timeBudgetMs: 20 } as never, policies: { "guard-pre": { enabled: true, mode: "enforce", thresholds: {} } } }) },
+      { config: baseConfig({ guardRails: { timeBudgetMs: 20 } as never, policies: { "guard-pre": { enabled: true, mode: "enforce", thresholds: {}, alwaysAuto: false, options: {} } } }) },
       async () => {
         await new Promise((resolve) => setTimeout(resolve, 200));
         return jsonResponse({
@@ -499,7 +499,7 @@ describe("evaluateGuard", () => {
 
   it("a disabled policy allows without calling Jev", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse({}));
-    const d = deps({ config: baseConfig({ policies: { "guard-pre": { enabled: false, mode: "shadow", thresholds: {} } } }) }, fetchImpl);
+    const d = deps({ config: baseConfig({ policies: { "guard-pre": { enabled: false, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {} } } }) }, fetchImpl);
     const result = await evaluateGuard(baseRequest({ toolName: "Edit" }), d);
     expect(result.decision).toBe("allow");
     expect(result.reason).toBe("policy-disabled");
