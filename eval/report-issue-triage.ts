@@ -12,7 +12,7 @@ import { issueTriagePolicy, confidenceMarginFor, type IssueTriageState } from ".
 import type { Policy, PolicyContext } from "../src/policies/types.js";
 import { loadJsonlDataset } from "./dataset.js";
 import { summarize } from "./metrics.js";
-import type { EvalCase, EvalResult } from "./types.js";
+import type { CalibrationReportJson, EvalCase, EvalResult } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -236,20 +236,41 @@ function main() {
   const questionStats = perQuestionStats(cases);
   const recommendation = recommendThresholds(sweep);
 
+  // `issue-triage-real.jsonl` is local-only (gitignored — see the .gitignore
+  // comment above it): it holds this company's real issue/agent content,
+  // which must never land in this public repo. Machines without that local
+  // file (CI, another engineer's checkout) still get the synthetic-only
+  // report below; only an operator who has generated it locally sees the
+  // supplementary real-issue section.
+  let realSection = "";
   const realDatasetPath = join(__dirname, "datasets", "issue-triage-real.jsonl");
-  const realCases = loadJsonlDataset(realDatasetPath) as EvalCase<IssueTriageState>[];
-  const realResults = decideAll(issueTriagePolicy, realCases, DEFAULT_THRESHOLDS);
-  const realMetrics = summarize(realResults);
+  try {
+    const realCases = loadJsonlDataset(realDatasetPath) as EvalCase<IssueTriageState>[];
+    const realResults = decideAll(issueTriagePolicy, realCases, DEFAULT_THRESHOLDS);
+    const realMetrics = summarize(realResults);
+    realSection = "\n" + toRealSection(realMetrics, realCases.length);
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    console.log(`No local ${realDatasetPath} found; skipping the real-issue report section.`);
+  }
 
-  const markdown =
-    toMarkdown({ datasetSize: cases.length, metrics, sweep, questionStats, recommendation }) +
-    "\n" +
-    toRealSection(realMetrics, realCases.length);
+  const markdown = toMarkdown({ datasetSize: cases.length, metrics, sweep, questionStats, recommendation }) + realSection;
 
   const outPath = join(__dirname, "reports", "issue-triage.md");
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, markdown);
   console.log(`Wrote eval report to ${outPath}`);
+
+  const jsonReport: CalibrationReportJson = {
+    policy: issueTriagePolicy.name,
+    generatedAt: new Date().toISOString(),
+    datasetSize: cases.length,
+    metrics,
+    recommendedThresholds: { confidenceMin: recommendation.confidenceMin, marginMin: recommendation.marginMin },
+  };
+  const jsonOutPath = join(__dirname, "reports", "issue-triage.json");
+  writeFileSync(jsonOutPath, JSON.stringify(jsonReport, null, 2) + "\n");
+  console.log(`Wrote calibration report to ${jsonOutPath}`);
 }
 
 main();

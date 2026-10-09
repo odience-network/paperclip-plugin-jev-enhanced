@@ -31,6 +31,11 @@ src/
     semaphore.ts        Bounded concurrency primitive (default: 6).
     types.ts           Zod schemas for the `typesafe_ask` request/response
                       wire shape (PR #13713) plus `JevAnswer`.
+    errors.ts           `classifyError()`: maps any thrown error (budget,
+                      missing key, validation, provider) to a short machine
+                      code — never the error's own message — for both the
+                      ledger's `reason` column and the tool/route error
+                      contract.
   ledger/
     db.ts              `LedgerDb` interface — matches `ctx.db` exactly so the
                       SDK's database client can be passed through unchanged.
@@ -51,10 +56,46 @@ src/
     issue-triage.ts     `issue-triage` policy: routes a new/updated issue to
                       an owner, priority, issue type, etc. See "Policies >
                       issue-triage" below for the full field mapping.
+    ask.ts              `ask` policy backing the `jev-ask` tool/route: runs a
+                      caller-supplied state/questions pair through the
+                      standard pipeline without interpreting the answers —
+                      every field is `observe`. See "Policies > ask" below.
+    classify-task.ts    `classify-task` policy backing `jev-classify-task`:
+                      work kind / model tier / review depth plus a per-skill
+                      load recommendation. See "Policies > classify-task".
+    verify.ts           `verify` policy backing `jev-verify`: claim vs.
+                      evidence → `supports`/`contradicts`/`says_nothing`. See
+                      "Policies > verify" below.
+    rerank.ts           `rerank` policy backing `jev-rerank`: per-candidate
+                      relevance/contains-answer/injection noul questions. See
+                      "Policies > rerank" below.
+    comment-triage.ts   `comment-triage` policy: classifies a new issue
+                      comment (blocker/question/decision/routine, urgency,
+                      prompt-injection) and optionally wakes the assignee.
+                      See "Policies > comment-triage" below.
+    run-outcome-qa.ts   `run-outcome-qa` policy: checks a finished/failed
+                      run's final comment for an unsupported completion
+                      claim or an independent needs-review signal, and
+                      optionally posts a reviewer-facing comment. See
+                      "Policies > run-outcome-qa" below.
     run.ts              `runPolicy()`: orchestrates one policy evaluation —
                       pre-filter, ledger-write-before-call, ask, decide,
                       ledger-complete, conditional apply/suggest.
     index.ts            Policy registry (`policies[name]`).
+  tools/
+    schemas.ts           Zod schemas for every tool's params and the
+                      `typesafe_ask` question/answer wire shapes shared with
+                      `jev/types.ts`; the single source of request validation
+                      for both the MCP tools and the `/tools/*` routes.
+    runTool.ts           `runDecisionTool()`: the shared MCP-tool/API-route
+                      dispatch used by `jev-ask`/`jev-classify-task`/
+                      `jev-verify`/`jev-rerank` — validates params against
+                      the caller's zod schema (`schemas.ts`), calls
+                      `runPolicy()`, and maps any failure to a short machine
+                      code via `jev/errors.ts`'s `classifyError`, so a tool
+                      handler never throws. `statusForToolError()` maps that
+                      same code to the HTTP status every `tool-*` API route
+                      returns for it.
   apply/
     index.ts            Side-effecting handlers invoked only when a policy's
                       mode is `enforce`. Never called in `shadow`/`suggest`.
@@ -71,23 +112,49 @@ eval/
                         Recorded-fixture eval runner (`pnpm eval --policy
                       <name>`); never calls the network or JevClient.
   datasets/             Larger labelled datasets (not just CI fixtures), e.g.
-                      `issue-triage.jsonl` (60 rows), used by the dedicated
-                      report scripts below rather than the CI smoke eval.
+                      `issue-triage.jsonl` (60 rows), `comment-triage.jsonl`
+                      (52 rows), `run-outcome-qa.jsonl` (42 rows), used by the
+                      dedicated report scripts below rather than the CI
+                      smoke eval.
   generate-issue-triage-dataset.ts
                         Generates `datasets/issue-triage.jsonl` and a 10-row
                       subset at `fixtures/issue-triage.jsonl`. Synthetic —
                       see the generated report's "Scope note" for why.
+  generate-comment-triage-dataset.ts
+                        Generates `datasets/comment-triage.jsonl` (52 rows:
+                      blocker/question/decision/routine, mixed-priority,
+                      low-confidence/ambiguous, prompt-injection, and
+                      no-assignee cases) and a 9-row subset at
+                      `fixtures/comment-triage.jsonl`. Synthetic, same reason
+                      as `issue-triage`'s generator.
+  generate-run-outcome-qa-dataset.ts
+                        Generates `datasets/run-outcome-qa.jsonl` (42 rows:
+                      well-evidenced claims, unsupported claims,
+                      needs-review signals, both at once, ambiguous, and
+                      no-final-comment cases) and an 8-row subset at
+                      `fixtures/run-outcome-qa.jsonl`. Synthetic, same reason
+                      as `issue-triage`'s generator.
   report-issue-triage.ts
                         Dedicated eval report for `issue-triage`: sweeps its
                       actual threshold keys (`confidenceMin`/`marginMin`,
                       not per-answer-key names like `eval/run.ts`'s generic
                       sweep), and writes `reports/issue-triage.md`.
+  report-comment-triage.ts, report-run-outcome-qa.ts
+                        Same dedicated-report pattern as `report-issue-triage
+                      .ts`, for `comment-triage` and `run-outcome-qa`
+                      respectively; write `reports/comment-triage.md` and
+                      `reports/run-outcome-qa.md`.
   reports/
     issue-triage.md     Generated eval report (accuracy, agreement, ECE,
                       threshold sweep, cost/latency, suggest-mode threshold
                       recommendation). Regenerate with `tsx
                       eval/report-issue-triage.ts` after changing the dataset
                       or the policy's `decide()`.
+    comment-triage.md, run-outcome-qa.md
+                        Same report shape as `issue-triage.md`, for the two
+                      new policies. Regenerate with `tsx
+                      eval/report-comment-triage.ts` / `tsx
+                      eval/report-run-outcome-qa.ts`.
 migrations/
   001_jev_tables.sql    `jev_decisions` / `jev_feedback` DDL.
 ```
@@ -279,6 +346,156 @@ See `eval/reports/issue-triage.md` for the current accuracy/agreement/ECE/
 threshold-sweep numbers and the recommended `suggest`-mode thresholds (from a
 synthetic dataset — see that report's "Scope note").
 
+### Policies > `ask`, `classify-task`, `verify`, `rerank`
+
+These four policies back the `jev-ask`/`jev-classify-task`/`jev-verify`/
+`jev-rerank` tools and their `tool-*` API routes (see `README.md`'s "Tools"
+section for request/response examples). All four are dispatched through the
+shared `runDecisionTool()` (`src/tools/runTool.ts`), default to `shadow`
+mode, and — unlike `issue-triage` — every field they ever decide is
+`action: "observe"`: none of them has a native `Issue` field to patch, so
+there is no `apply`/`suggest` path to reach. The ledger row is their only
+effect.
+
+#### `ask` (`src/policies/ask.ts`)
+
+Backs the generic `jev-ask` tool. The caller supplies both `state` and
+`questions` directly (validated against the shared `jevQuestionSchema` in
+`src/tools/schemas.ts` before this policy ever runs); `decide()` just
+echoes each answer back as an observe-only field (`noul >= 0.5` → boolean,
+`choice`/`score` passed through as-is) and reports the minimum
+confidence/margin across all answers. `preFilter` rejects an empty
+`questions` map. Verdict: `"answered"` once at least one field is present,
+`"no-answer"` otherwise.
+
+#### `classify-task` (`src/policies/classify-task.ts`)
+
+Backs `jev-classify-task`. Three independent choice questions plus one noul
+per candidate skill:
+
+| Question | Type | Catalog |
+|---|---|---|
+| `workKind` | choice | `feature`/`bug`/`refactor`/`chore`/`docs`/`research` |
+| `modelTier` | choice | `fast`/`standard`/`strong` |
+| `reviewDepth` | choice | `light`/`standard`/`thorough` |
+| `loadSkill:<id>` | noul, one per `candidateSkills` entry | — |
+
+`preFilter` rejects a blank `description`. Verdict is `"work-kind:<value>"`
+(e.g. `"work-kind:bug"`) taken from the `workKind` field's confidence/margin,
+or `"no-answer"` if `workKind` is missing or the wrong answer type.
+
+#### `verify` (`src/policies/verify.ts`)
+
+Backs `jev-verify`. One choice question — "does `evidence` support,
+contradict, or say nothing about `claim`" — over
+`VERIFY_RELATION_CATALOG = ["supports", "contradicts", "says_nothing"]`.
+`preFilter` rejects a blank `claim` or `evidence`. The verdict *is* the
+relation itself (`"supports"`/`"contradicts"`/`"says_nothing"`), or
+`"no-answer"` if the `relation` answer is missing or not a choice answer.
+The question's own instructions call out the completion-claim case
+explicitly: a "this is done" claim is only `supports` when the evidence is
+an actual passed test/check, not the claim restated in different words.
+
+#### `rerank` (`src/policies/rerank.ts`)
+
+Backs `jev-rerank`. Three noul questions per candidate —
+`relevant:<id>`, `containsAnswer:<id>`, `injection:<id>` — scored
+independently. `preFilter` rejects an empty `query` or an empty
+`candidates` list. Verdict is `"ranked"` once at least one candidate has at
+least one valid answer, or `"no-answer"` otherwise; `decide()` reports the
+minimum confidence/margin across all per-candidate fields. The tool never
+reorders `candidates` itself — the caller reranks using the returned
+per-candidate booleans, and should treat a `true` `injection:<id>` as a
+reason to discount that candidate's `containsAnswer:<id>` regardless of its
+own confidence.
+
+### Policies > `comment-triage`
+
+`src/policies/comment-triage.ts`. Triggered by `issue.comment.created`. One
+`typesafe_ask` call per comment, with these questions (all static — question
+text never interpolates the comment body, issue title, or issue description,
+so a prompt-injection attempt in the comment can only ever be *classified*,
+never followed):
+
+| Question | Type | Maps to |
+|---|---|---|
+| `is_blocker_report` | noul | gates `wakeupAssignee`, highest verdict priority |
+| `is_question_for_human` | noul | gates `wakeupAssignee`, second verdict priority |
+| `contains_decision_or_approval` | noul | observe-only, third verdict priority |
+| `urgency` | score (low/medium/high/critical) | observe-only |
+| `prompt_injection` | noul | observe-only — recorded for analysis, never blocks or alters the verdict |
+
+`decide()` computes `needsAttention = is_blocker_report || is_question_for_human`
+(each gated by `confidence >= thresholds.confidenceMin` (default `0.7`) and
+`margin >= thresholds.marginMin` (default `0.15`), same gate shape as
+`issue-triage`). The `wakeupAssignee` field is `action: "apply"` iff
+`needsAttention` and the issue has an assignee; otherwise `observe`. Verdict
+priority is `blocker` > `question` > `decision` > `routine` — a comment that
+trips more than one flag (e.g. a blocker report that is also phrased as a
+question) always reports as the higher-priority verdict.
+
+`preFilter` skips: comments the plugin itself authored (`isPluginOrigin`);
+re-triage where the computed state hash matches the prior decision's hash;
+and comments authored by `authorType: "system"` (nothing a human or agent
+said, so nothing to triage).
+
+Mode semantics for `wakeupAssignee` once the gate clears:
+- **shadow**: ledger row only, `outcome: "observed"`.
+- **suggest**: posts one `request_confirmation` issue-thread interaction.
+- **enforce**: calls `ctx.issues.requestWakeup` on the assignee
+  (`src/apply/index.ts`) — never touches `assigneeAgentId`/`assigneeUserId`.
+
+The dashboard widget feed reads recent classifications via
+`ctx.data.register("comment-triage-feed", ...)` in `worker.ts`, scoped by
+`companyId` (required) and the `comment-triage` policy name.
+
+See `eval/reports/comment-triage.md` for the current accuracy/agreement/ECE/
+threshold-sweep numbers and the recommended `suggest`-mode thresholds (from a
+synthetic dataset — see that report's "Scope note").
+
+### Policies > `run-outcome-qa`
+
+`src/policies/run-outcome-qa.ts`. Triggered by `agent.run.finished` and
+`agent.run.failed`. One `typesafe_ask` call per run, evaluated over the
+run's final issue comment plus the issue's title/description — again, all
+question text is static and never interpolates that text, for the same
+prompt-injection reason as `comment-triage`.
+
+| Question | Type | Maps to |
+|---|---|---|
+| `completion_claim_present` | noul | gates `reviewerComment` together with `claim_supported_by_evidence` |
+| `claim_supported_by_evidence` | noul | gates `reviewerComment` together with `completion_claim_present` |
+| `tests_mentioned` | noul | observe-only |
+| `scope_narrowed` | noul | observe-only |
+| `needs_review` | noul | gates `reviewerComment` independently of the completion-claim pair |
+
+`decide()` computes two independent flags, each confidence/margin-gated the
+same way as `issue-triage`/`comment-triage`:
+`unsupportedClaim = completion_claim_present && !claim_supported_by_evidence`
+(only when both answers clear the gate), and `flaggedNeedsReview =
+needs_review` clearing the gate on its own. `reviewerComment` is `action:
+"apply"` iff either flag is set; otherwise `observe`. Verdict is one of
+`flag:unsupported-claim+needs-review`, `flag:unsupported-claim`,
+`flag:needs-review`, or `ok`.
+
+`preFilter` skips: runs the plugin itself originated (`isPluginOrigin`) and
+re-evaluation where the computed state hash matches the prior decision's
+hash. A run that left no final comment at all (`finalCommentBody: null`) is
+**not** skipped — the absence of a completion claim is itself a signal the
+policy can flag via `needs_review`, not an error state.
+
+Mode semantics for `reviewerComment` once a flag is set:
+- **shadow**: ledger row only, `outcome: "observed"`.
+- **suggest**: posts one `request_confirmation` issue-thread interaction.
+- **enforce**: posts a reviewer-facing comment via `ctx.issues.createComment`
+  (`src/apply/index.ts`) naming the structured flag(s) (e.g.
+  `flag:unsupported-claim`) — never the raw final-comment text, to avoid
+  re-surfacing any injection attempt it might contain.
+
+See `eval/reports/run-outcome-qa.md` for the current accuracy/agreement/ECE/
+threshold-sweep numbers and the recommended `suggest`-mode thresholds (from a
+synthetic dataset — see that report's "Scope note").
+
 ## Eval runner
 
 `pnpm eval --policy <name>` (`eval/run.ts`) loads a JSONL fixture
@@ -294,10 +511,79 @@ is what CI's "smoke eval" step runs, and what gates a policy's promotion from
 
 `eval/run.ts`'s generic sweep assumes threshold keys match answer-key names
 (true for `ping`'s `pong`). Policies with differently-named thresholds — like
-`issue-triage`'s `confidenceMin`/`marginMin`/`maxCandidates` — need a
-dedicated report script instead (`eval/report-issue-triage.ts` is the
-pattern to copy for a future policy in this situation); `eval/run.ts` itself
-is left generic rather than special-cased per policy.
+`issue-triage`'s `confidenceMin`/`marginMin`/`maxCandidates`, or
+`comment-triage`'s and `run-outcome-qa`'s `confidenceMin`/`marginMin` — need
+a dedicated report script instead (`eval/report-issue-triage.ts`,
+`eval/report-comment-triage.ts`, and `eval/report-run-outcome-qa.ts` are all
+the same pattern, each keyed to its own policy's apply-eligible field);
+`eval/run.ts` itself is left generic rather than special-cased per policy.
+
+Both report scripts also write a machine-readable sibling JSON file next to
+their `.md` report (`eval/reports/<policy>.json`), with the same metrics the
+markdown prose describes (`count`/`accuracy`/`agreement`/`ece`/
+`avgLatencyMs`/`avgCostUsd`/`totalCostUsd`, plus `recommendedThresholds` for
+`issue-triage`). `src/eval-reports/index.ts` imports those JSON files
+directly (an ordinary ESM JSON import, resolved at build time, not a runtime
+filesystem read) and re-exports them as `CALIBRATION_REPORTS`, so the
+settings page's calibration table always reflects the last committed eval
+run with no hand-pasted numbers to drift out of sync. Regenerate both the
+`.md` and `.json` together by re-running the report script; never hand-edit
+either.
+
+## Plugin UI
+
+`src/ui/index.tsx` re-exports three components, one per manifest `ui.slots`
+entry (`src/manifest.ts`):
+
+- **`IssueDecisionsTab`** (`src/ui/issue-tab.tsx`, `detailTab` slot) — the
+  latest decision per policy for the current issue (confidence, margin,
+  mode, cost, outcome) with Accept/Override buttons that call the `feedback`
+  action, a "Triage now" button that calls the `triage-issue` action (the
+  same action `issue.created`/`issue.updated` and the backlog sweep job use
+  — see "Policies > `issue-triage`" above), and the full decision history
+  below. Reads via `usePluginData("decisions-latest-by-policy")` and
+  `usePluginData("decisions-history")`.
+- **`DashboardWidget`** (`src/ui/dashboard-widget.tsx`, `dashboardWidget`
+  slot) — 30-day decision count and cost, human-feedback agreement rate,
+  shadow/suggest/enforce mode split, and TypeSafe provider health. Reads via
+  `usePluginData("dashboard-summary")`.
+- **`SettingsPage`** (`src/ui/settings-page.tsx`, `settingsPage` slot) —
+  company-scoped config (model, base URL, daily token budget, redaction
+  patterns, respect-existing-fields, and per-policy enabled/mode/thresholds),
+  a Test Connection button, and a calibration summary table sourced from
+  `usePluginData("calibration-summary")` (backed by `src/eval-reports/index.ts`,
+  above). The TypeSafe API key is shown as bound/unbound only — this form
+  never reads or writes `apiKeyRef`'s value, only passes it through
+  unchanged on save.
+
+  **Same-origin fetch, narrowly, for config load/save only.** Every other
+  plugin data/action flows through the bridge (`usePluginData`/
+  `usePluginAction`), per the no-same-origin-JS rule. `settingsPage` is the
+  one exception: `PluginConfigClient` (the worker-side SDK type) only
+  exposes `get()`, with no write path, so a worker action can't save config
+  on this SDK version. Until the SDK adds a config write method, this form
+  calls the host's own `/api/plugins/odience.jev/config` route directly
+  (`GET` to load, `POST` to save) with `credentials: "include"`, and
+  `POST .../config/test` to invoke `onValidateConfig` for Test Connection
+  without persisting. Remove this workaround and switch to a bridge action
+  the moment the SDK ships a config-write primitive. No other surface in
+  this plugin (data handler, action, or UI component) may call a host route
+  directly — this carve-out is scoped to config load/save/test on the
+  settings page only.
+
+None of these files may import worker-side modules (`src/ledger/*`,
+`src/policies/*`, `src/config.ts`): those pull in `node:crypto`, `zod`, and
+`@typesafe-ai/sdk`, none of which belong in a browser bundle. `src/ui/types.ts`
+declares local mirrors of the worker-side row/summary shapes instead of
+importing them, and `settings-page.tsx` hardcodes the plugin id and the
+policy name registry for the same reason.
+
+Component tests (`tests/ui/*.spec.tsx`, jsdom + Testing Library) cover
+loading/empty/error/populated states for all three surfaces.
+`tests/helpers/ui-bridge.ts` installs a real `globalThis.__paperclipPluginBridge__`
+backed by `createTestHarness` and the same fake ledger db the worker tests
+use, so the issue tab's Accept/Override round-trip is verified against a
+real `feedback` action call and a real ledger read, not a mock.
 
 ## Deployment
 
@@ -346,6 +632,12 @@ the namespace per the host's normal plugin-uninstall data-retention policy.
   leaves the plugin, ahead of canonicalization's hash and the provider call.
 - Every policy defaults to `shadow` mode; `apply/` (the only place with side
   effects) is unreachable except in `enforce` mode.
+- `ask`/`classify-task`/`verify`/`rerank` (the `jev-*` decision tools and
+  their `tool-*` API routes) never reach `apply/`/`suggest/` at all — every
+  field they decide is `action: "observe"`, since none of them maps to a
+  native `Issue` field. They are observation/advisory tools, not routing
+  policies, and are documented as such (including what Jev cannot do — no
+  generation, not injection-aware) in the `jev-decisions` company skill.
 - Jev must never override a human-set `assigneeUserId`, and only overrides
   other human-set fields (priority/status) when an operator has explicitly
   chosen `always_auto` for that policy — see `respectExistingFields` in
