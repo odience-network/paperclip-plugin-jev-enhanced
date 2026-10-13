@@ -28,6 +28,9 @@ import { askPolicy } from "./ask.js";
 import { classifyTaskPolicy } from "./classify-task.js";
 import { verifyPolicy } from "./verify.js";
 import { rerankPolicy } from "./rerank.js";
+import { guardPrePolicy } from "../guard/pre.js";
+import { guardPostPolicy } from "../guard/post.js";
+import { guardStopPolicy } from "../guard/stop.js";
 import type { Policy } from "./types.js";
 
 /** Every policy this plugin ships, keyed by `policy.name`. Add new policies
@@ -39,4 +42,7 @@ export const policies: Record<string, Policy<any>> = {
   [classifyTaskPolicy.name]: classifyTaskPolicy,
   [verifyPolicy.name]: verifyPolicy,
   [rerankPolicy.name]: rerankPolicy,
+  [guardPrePolicy.name]: guardPrePolicy,
+  [guardPostPolicy.name]: guardPostPolicy,
+  [guardStopPolicy.name]: guardStopPolicy,
 };

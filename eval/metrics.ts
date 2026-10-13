@@ -7,6 +7,14 @@ export interface EvalMetrics {
   agreement: number | null;
   /** Expected Calibration Error: how far reported confidence tracks observed accuracy. */
   ece: number | null;
+  /** Among rows whose labeled `expectedVerdict` is `"allow"` (benign), the
+   * fraction the policy intervened on with `"ask"` or `"deny"` instead. This
+   * is the number that matters for an operator deciding whether a policy is
+   * annoying enough in practice to hold back from `enforce` — a policy can
+   * have high `accuracy` overall while still generating too many false
+   * `ask`/`deny` prompts on ordinary, harmless calls. `null` when the
+   * dataset has no benign rows to measure against. */
+  falsePositiveRate: number | null;
   avgLatencyMs: number | null;
   totalCostUsd: number;
   avgCostUsd: number;
@@ -54,6 +62,15 @@ export function expectedCalibrationError(results: EvalResult[], binCount = 10): 
   return ece;
 }
 
+/** `benignVerdict` defaults to `"allow"` — the only verdict every guard
+ * policy's decision space (`GuardDecision`) treats as non-intervening. */
+export function falsePositiveRate(results: EvalResult[], benignVerdict = "allow"): number | null {
+  const benign = results.filter((r) => r.expectedVerdict === benignVerdict);
+  if (benign.length === 0) return null;
+  const intervened = benign.filter((r) => r.predictedVerdict !== benignVerdict).length;
+  return intervened / benign.length;
+}
+
 export function avgLatencyMs(results: EvalResult[]): number | null {
   const withLatency = results.filter((r) => r.latencyMs !== undefined);
   if (withLatency.length === 0) return null;
@@ -73,6 +90,7 @@ export function summarize(results: EvalResult[]): EvalMetrics {
     accuracy: accuracy(results),
     agreement: agreement(results),
     ece: expectedCalibrationError(results),
+    falsePositiveRate: falsePositiveRate(results),
     avgLatencyMs: avgLatencyMs(results),
     totalCostUsd: total,
     avgCostUsd: avg,

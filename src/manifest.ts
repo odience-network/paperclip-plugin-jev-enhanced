@@ -37,6 +37,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "agents.read",
     "issues.update",
     "issue.interactions.create",
+    "issue.interactions.read",
   ],
   entrypoints: {
     worker: "./dist/worker.js",
@@ -332,6 +333,15 @@ const manifest: PaperclipPluginManifestV1 = {
       auth: "board-or-agent",
       capability: "api.routes.register",
       companyResolution: { from: "body", key: "companyId" },
+    },
+    {
+      routeKey: "guard-evaluate",
+      method: "POST",
+      path: "/guard/evaluate",
+      auth: "agent",
+      capability: "api.routes.register",
+      companyResolution: { from: "body", key: "companyId" },
+      checkoutPolicy: "none",
     },
   ],
   skills: [
