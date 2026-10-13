@@ -55,6 +55,18 @@ export class JevValidationError extends Error {
   }
 }
 
+/** Thrown by a `resolveApiKey` implementation (never by this client itself)
+ * when no TypeSafe key is bound yet. `worker.ts`'s `buildClient` throws this
+ * instead of a bare `Error` so `classifyError` can map it to a stable
+ * `"missing-api-key"` ledger reason / tool error code instead of
+ * `"unknown-error"`. */
+export class MissingApiKeyError extends Error {
+  constructor(message = "No TypeSafe API key bound. Bind a vault secret to apiKeyRef.") {
+    super(message);
+    this.name = "MissingApiKeyError";
+  }
+}
+
 /**
  * Thin wrapper over `@typesafe-ai/sdk`'s `TypeSafeClient` that adds the
  * policies this plugin needs on top of the raw SDK: redaction, truncation,
