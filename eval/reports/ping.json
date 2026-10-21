@@ -1,0 +1,14 @@
+{
+  "policy": "ping",
+  "generatedAt": "2026-10-09T07:17:17.097Z",
+  "datasetSize": 6,
+  "metrics": {
+    "count": 6,
+    "accuracy": 1,
+    "agreement": 0.8333333333333334,
+    "ece": 0.4766666666666667,
+    "avgLatencyMs": 406.6666666666667,
+    "totalCostUsd": 0.000421,
+    "avgCostUsd": 0.00007016666666666666
+  }
+}

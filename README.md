@@ -180,6 +180,89 @@ Lists this company's `jev_decisions` ledger rows for one issue, newest
 first (used by the issue detail UI and hooks). `companyId` is resolved from
 the query string; `limit` defaults to 20 and is capped at 100.
 
+## Browser decision tool (`jev-decide-browser-action`)
+
+Lets a browsing agent ask Jev "what should I do next on this page?" without ever handing it a
+selector, an XPath, or raw DOM. The agent sends a `goal`, the current page `url`, and an indexed
+table of candidate elements (role, visible text, aria-label, placeholder — never a locator); the
+tool returns one action from a closed space (`click`, `type`, `select`, `scroll`, `wait`, `done`,
+`blocked`) plus a `targetIndex` into that same table. The tool is advisory only: it never touches
+the page itself — the calling harness decides whether and how to carry out the action.
+
+Two gates run before the decided action can ever reach the caller:
+
+- **Origin allowlist** — checked deterministically, before any provider call. `url`'s origin must
+  appear in this company's `browserAllowedOrigins` config (empty by default, so every origin is
+  blocked until configured). An origin outside the allowlist returns `{ outcome: "blocked", action:
+  "blocked", reason: "origin-not-allowlisted" }` without spending any tokens.
+- **Sensitivity gate** — for mutating actions (`click`, `type`, `select`), Jev also answers whether
+  the action involves payment, credentials, or a destructive/irreversible change. If so (and the
+  policy is not in `shadow` mode), the tool returns `action: "blocked"` with `observedAction` set
+  to the action Jev actually picked (e.g. `"click"`), and — when called with an `issueId` — opens a
+  `request_confirmation` card on that issue, keyed so the same pending decision always reuses the
+  same card instead of spamming a new one. Once a human accepts or rejects that card, the next call
+  with the same goal/url/elements returns the resolved action (`reason: "human-confirmed"`) or stays
+  blocked for good (`reason: "human-rejected"`) — it never re-asks.
+
+Like every Jev policy, `browser-action` ships in `shadow` mode by default. In `shadow`, the tool is
+fully non-actionable: `action` is always `"blocked"` (`reason: "shadow-mode"` unless a deterministic
+gate — origin, confidence, target — already blocked it for its own reason) and no confirmation card
+is ever opened. `observedAction` still reports what Jev would have picked, for observability, until
+the company's config raises the policy to `suggest` or `enforce`.
+
+### Example loop
+
+```ts
+let done = false;
+while (!done) {
+  const page = await harness.snapshotPage(); // harness-owned: builds the indexed element table
+  const decision = await paperclip.tools.call("jev-decide-browser-action", {
+    issueId,
+    goal: "Submit the contact form",
+    url: page.url,
+    elements: page.elements, // [{ index, role, text?, ariaLabel?, placeholder?, inputType?, disabled? }, ...]
+  });
+
+  switch (decision.action) {
+    case "blocked":
+      if (decision.requiresConfirmation) {
+        // A human must accept/reject the request_confirmation card opened on `issueId`
+        // (observedAction + decision.targetIndex say what's waiting) before trying again.
+        // Calling again after it's resolved returns the human's decision — no new card.
+        await harness.waitForConfirmation(decision.confirmationInteractionId);
+        continue;
+      }
+      // Origin not allowlisted, low confidence, no target resolved, shadow mode, or a human
+      // rejected the confirmation — stop and escalate.
+      done = true;
+      break;
+    case "wait":
+      await harness.sleep(1000);
+      break;
+    case "done":
+      done = true;
+      break;
+    default:
+      // click / type / select / scroll: harness maps `decision.targetIndex` back to the real
+      // element it tracked when building the table, then performs the action itself.
+      await harness.performAction(decision.action, decision.targetIndex);
+  }
+}
+```
+
+### Testing and evaluation
+
+- `tests/browserAction.spec.ts` — unit tests for the closed action space, confidence/sensitivity/
+  target gating, and the `resolveTargetIndex`/`resolveSensitive` helpers.
+- `tests/browserDecision.spec.ts` — tool-level tests for input validation, the origin allowlist,
+  the sensitivity → `request_confirmation` flow, and ledger writes.
+- `eval/fixtures/browser-action.jsonl` — recorded fixtures covering every action, a sensitivity-
+  gated case, a no-target-resolved case, and a model/human disagreement case. Run with:
+
+  ```bash
+  pnpm eval --policy browser-action
+  ```
+
 ## Hook install
 
 Placeholder — filled in by T4 once the hook harness lands. Hooks will call
