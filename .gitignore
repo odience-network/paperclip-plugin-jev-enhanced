@@ -9,3 +9,10 @@ node_modules
 # Paperclip issue document; only aggregate metrics belong in eval/reports/.
 /eval/fixtures/issue-triage-real-snapshot.json
 /eval/datasets/issue-triage-real.jsonl
+
+# Live provider tokens for the env-gated `pnpm test:live` runner and the eval
+# (VERDICT_LIVE_*). Local-only: never commit, never put in CI. A committed
+# `.env.example` with empty values is fine.
+.env
+.env.*
+!.env.example
