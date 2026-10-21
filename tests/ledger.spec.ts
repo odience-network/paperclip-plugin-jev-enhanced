@@ -1,114 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { LedgerDb } from "../src/ledger/db.js";
+import { createFakeDb } from "./helpers/fake-db.js";
 import {
   beginDecision,
   completeDecision,
+  getDailyDecisionStats,
+  getDecisionById,
   getLatestDecision,
+  getModeSplit,
   getPolicyAggregate,
   listDecisionHistory,
+  listLatestDecisionsByPolicy,
 } from "../src/ledger/decisions.js";
-import { recordFeedback } from "../src/ledger/feedback.js";
+import { getFeedbackSummary, listFeedbackForDecisions, recordFeedback } from "../src/ledger/feedback.js";
 import { acquireLease, type LeaseState } from "../src/ledger/leases.js";
-
-/** A minimal in-memory `LedgerDb` that actually stores rows, since the real
- * SDK test harness always returns `[]` from `query()` and can't be seeded. */
-function createFakeDb(): LedgerDb {
-  const decisions: Record<string, unknown>[] = [];
-  const feedback: Record<string, unknown>[] = [];
-
-  return {
-    namespace: "plugin_jev_test",
-    async execute(sql, params = []) {
-      if (sql.includes("INSERT INTO") && sql.includes("jev_decisions")) {
-        const [id, companyId, issueId, runId, agentId, policy, policyVersion, questionVersion, model, stateHash, mode] = params;
-        decisions.push({
-          id,
-          company_id: companyId,
-          issue_id: issueId,
-          run_id: runId,
-          agent_id: agentId,
-          policy,
-          policy_version: policyVersion,
-          question_version: questionVersion,
-          model,
-          state_hash: stateHash,
-          answers: {},
-          confidence: null,
-          margin: null,
-          latency_ms: null,
-          usage: { input_tokens: 0, output_tokens: 0 },
-          cost_usd: 0,
-          mode,
-          outcome: "observed",
-          reason: null,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
-        return { rowCount: 1 };
-      }
-      if (sql.includes("UPDATE") && sql.includes("jev_decisions")) {
-        const [id, stateHash, answers, confidence, margin, latencyMs, usage, costUsd, outcome, reason] = params;
-        const row = decisions.find((r) => r.id === id);
-        if (row) {
-          Object.assign(row, {
-            state_hash: stateHash,
-            answers: JSON.parse(answers as string),
-            confidence,
-            margin,
-            latency_ms: latencyMs,
-            usage: JSON.parse(usage as string),
-            cost_usd: costUsd,
-            outcome,
-            reason,
-            updated_at: new Date().toISOString(),
-          });
-        }
-        return { rowCount: row ? 1 : 0 };
-      }
-      if (sql.includes("INSERT INTO") && sql.includes("jev_feedback")) {
-        const [id, decisionId, userId, agentId, verdict, note] = params;
-        feedback.push({ id, decision_id: decisionId, user_id: userId, agent_id: agentId, verdict, note });
-        return { rowCount: 1 };
-      }
-      throw new Error(`Unhandled SQL in fake db: ${sql}`);
-    },
-    async query<T>(sql: string, params: unknown[] = []): Promise<T[]> {
-      if (sql.includes("company_id = $1 AND issue_id = $2") && sql.includes("ORDER BY created_at DESC LIMIT 1")) {
-        const [companyId, issueId] = params;
-        return decisions.filter((r) => r.company_id === companyId && r.issue_id === issueId).slice(0, 1) as T[];
-      }
-      if (sql.includes("company_id = $1 AND issue_id = $2") && sql.includes("LIMIT $3")) {
-        const [companyId, issueId, limit] = params as [string, string, number];
-        return decisions
-          .filter((r) => r.company_id === companyId && r.issue_id === issueId)
-          .slice(0, limit) as T[];
-      }
-      if (sql.includes("avg(confidence)")) {
-        const [companyId, policy] = params as [string, string];
-        const matching = decisions.filter((r) => r.company_id === companyId && r.policy === policy);
-        return [
-          {
-            decision_count: String(matching.length),
-            avg_confidence: matching.length ? String(matching[0].confidence ?? 0) : null,
-            avg_latency_ms: matching.length ? String(matching[0].latency_ms ?? 0) : null,
-            total_cost_usd: String(matching.reduce((sum, r) => sum + Number(r.cost_usd ?? 0), 0)),
-          },
-        ] as T[];
-      }
-      if (sql.includes("GROUP BY outcome")) {
-        const [companyId, policy] = params as [string, string];
-        const matching = decisions.filter((r) => r.company_id === companyId && r.policy === policy);
-        const counts = new Map<string, number>();
-        for (const row of matching) {
-          const outcome = row.outcome as string;
-          counts.set(outcome, (counts.get(outcome) ?? 0) + 1);
-        }
-        return [...counts.entries()].map(([outcome, count]) => ({ outcome, count: String(count) })) as T[];
-      }
-      throw new Error(`Unhandled SQL in fake db: ${sql}`);
-    },
-  };
-}
 
 describe("ledger/decisions", () => {
   it("writes the audit row before the result is known, then completes it", async () => {
@@ -235,6 +140,114 @@ describe("ledger/decisions", () => {
     expect(latestForUnrelatedCompany).toBeNull();
   });
 
+  it("never returns another company's decision by id", async () => {
+    const db = createFakeDb();
+    const id = await beginDecision(db, {
+      companyId: "company_1",
+      issueId: "issue_1",
+      policy: "ping",
+      policyVersion: "1.0.0",
+      questionVersion: "1.0.0",
+      model: "jev-1.13.0",
+      mode: "shadow",
+    });
+
+    expect((await getDecisionById(db, "company_1", id))?.id).toBe(id);
+    expect(await getDecisionById(db, "company_2", id)).toBeNull();
+  });
+
+  it("returns only the latest decision per policy for an issue", async () => {
+    const db = createFakeDb();
+    const olderPing = await beginDecision(db, {
+      companyId: "company_1",
+      issueId: "issue_1",
+      policy: "ping",
+      policyVersion: "1.0.0",
+      questionVersion: "1.0.0",
+      model: "jev-1.13.0",
+      mode: "shadow",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const newerPing = await beginDecision(db, {
+      companyId: "company_1",
+      issueId: "issue_1",
+      policy: "ping",
+      policyVersion: "1.0.0",
+      questionVersion: "1.0.0",
+      model: "jev-1.13.0",
+      mode: "shadow",
+    });
+    await beginDecision(db, {
+      companyId: "company_1",
+      issueId: "issue_1",
+      policy: "other-policy",
+      policyVersion: "1.0.0",
+      questionVersion: "1.0.0",
+      model: "jev-1.13.0",
+      mode: "shadow",
+    });
+
+    const latest = await listLatestDecisionsByPolicy(db, "company_1", "issue_1");
+    expect(latest).toHaveLength(2);
+    const pingDecision = latest.find((d) => d.policy === "ping");
+    expect(pingDecision?.id).toBe(newerPing);
+    expect(pingDecision?.id).not.toBe(olderPing);
+  });
+
+  it("buckets decisions per day and sums cost, scoped to company and window", async () => {
+    const db = createFakeDb();
+    await beginDecision(db, {
+      companyId: "company_1",
+      issueId: "issue_1",
+      policy: "ping",
+      policyVersion: "1.0.0",
+      questionVersion: "1.0.0",
+      model: "jev-1.13.0",
+      mode: "shadow",
+    });
+    await beginDecision(db, {
+      companyId: "company_2",
+      issueId: "issue_1",
+      policy: "ping",
+      policyVersion: "1.0.0",
+      questionVersion: "1.0.0",
+      model: "jev-1.13.0",
+      mode: "shadow",
+    });
+
+    const stats = await getDailyDecisionStats(db, "company_1", "1970-01-01T00:00:00.000Z");
+    expect(stats).toHaveLength(1);
+    expect(stats[0]?.decisionCount).toBe(1);
+
+    const future = await getDailyDecisionStats(db, "company_1", "2999-01-01T00:00:00.000Z");
+    expect(future).toHaveLength(0);
+  });
+
+  it("splits decisions by mode, scoped to company", async () => {
+    const db = createFakeDb();
+    await beginDecision(db, {
+      companyId: "company_1",
+      issueId: "issue_1",
+      policy: "ping",
+      policyVersion: "1.0.0",
+      questionVersion: "1.0.0",
+      model: "jev-1.13.0",
+      mode: "shadow",
+    });
+    await beginDecision(db, {
+      companyId: "company_1",
+      issueId: "issue_2",
+      policy: "ping",
+      policyVersion: "1.0.0",
+      questionVersion: "1.0.0",
+      model: "jev-1.13.0",
+      mode: "enforce",
+    });
+
+    const split = await getModeSplit(db, "company_1");
+    expect(split).toEqual({ shadow: 1, suggest: 0, enforce: 1 });
+  });
+
   it("caps listDecisionHistory's limit regardless of what the caller requests", async () => {
     const inner = createFakeDb();
     const queriedLimits: unknown[] = [];
@@ -258,6 +271,53 @@ describe("ledger/feedback", () => {
     const db = createFakeDb();
     const id = await recordFeedback(db, { decisionId: "decision_1", userId: "user_1", verdict: "accept" });
     expect(id).toBeTruthy();
+  });
+
+  it("lists feedback for a set of decision ids, empty array short-circuits with no query", async () => {
+    const db = createFakeDb();
+    await recordFeedback(db, { decisionId: "decision_1", userId: "user_1", verdict: "accept" });
+    await recordFeedback(db, { decisionId: "decision_2", userId: "user_1", verdict: "override" });
+
+    expect(await listFeedbackForDecisions(db, [])).toEqual([]);
+
+    const rows = await listFeedbackForDecisions(db, ["decision_1"]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.decisionId).toBe("decision_1");
+    expect(rows[0]?.verdict).toBe("accept");
+  });
+
+  it("summarizes agreement rate scoped to a company via the decisions join, excluding other companies", async () => {
+    const db = createFakeDb();
+    const ownDecision = await beginDecision(db, {
+      companyId: "company_1",
+      issueId: "issue_1",
+      policy: "ping",
+      policyVersion: "1.0.0",
+      questionVersion: "1.0.0",
+      model: "jev-1.13.0",
+      mode: "shadow",
+    });
+    const otherCompanyDecision = await beginDecision(db, {
+      companyId: "company_2",
+      issueId: "issue_1",
+      policy: "ping",
+      policyVersion: "1.0.0",
+      questionVersion: "1.0.0",
+      model: "jev-1.13.0",
+      mode: "shadow",
+    });
+    await recordFeedback(db, { decisionId: ownDecision, userId: "user_1", verdict: "accept" });
+    await recordFeedback(db, { decisionId: ownDecision, userId: "user_1", verdict: "override" });
+    await recordFeedback(db, { decisionId: otherCompanyDecision, userId: "user_2", verdict: "override" });
+
+    const summary = await getFeedbackSummary(db, "company_1");
+    expect(summary).toEqual({ total: 2, accept: 1, override: 1, agreementRate: 0.5 });
+  });
+
+  it("reports a null agreement rate when there is no feedback yet", async () => {
+    const db = createFakeDb();
+    const summary = await getFeedbackSummary(db, "company_1");
+    expect(summary).toEqual({ total: 0, accept: 0, override: 0, agreementRate: null });
   });
 });
 

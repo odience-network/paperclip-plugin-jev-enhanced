@@ -9,3 +9,4 @@ node_modules
 # Paperclip issue document; only aggregate metrics belong in eval/reports/.
 /eval/fixtures/issue-triage-real-snapshot.json
 /eval/datasets/issue-triage-real.jsonl
+eval/results
