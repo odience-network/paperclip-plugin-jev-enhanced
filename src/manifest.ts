@@ -15,6 +15,7 @@ const manifest: PaperclipPluginManifestV1 = {
   categories: ["connector", "automation"],
   capabilities: [
     "events.subscribe",
+    "events.emit",
     "plugin.state.read",
     "plugin.state.write",
     "database.namespace.read",
@@ -36,7 +37,11 @@ const manifest: PaperclipPluginManifestV1 = {
     "issues.read",
     "agents.read",
     "issues.update",
+    "issues.wakeup",
     "issue.interactions.create",
+    "issue.interactions.read",
+    "issue.comments.read",
+    "issue.comments.create",
   ],
   entrypoints: {
     worker: "./dist/worker.js",
@@ -332,6 +337,15 @@ const manifest: PaperclipPluginManifestV1 = {
       auth: "board-or-agent",
       capability: "api.routes.register",
       companyResolution: { from: "body", key: "companyId" },
+    },
+    {
+      routeKey: "guard-evaluate",
+      method: "POST",
+      path: "/guard/evaluate",
+      auth: "agent",
+      capability: "api.routes.register",
+      companyResolution: { from: "body", key: "companyId" },
+      checkoutPolicy: "none",
     },
   ],
   skills: [
