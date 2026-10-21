@@ -2,6 +2,7 @@ import {
   definePlugin,
   runWorker,
   type PluginContext,
+  type PluginEvent,
   type PluginHealthDiagnostics,
   type PluginConfigValidationResult,
   type PluginApiRequestInput,
@@ -21,6 +22,7 @@ import {
   getLatestDecision,
   getLatestDecisionForPolicy,
   listDecisionHistory,
+  listRecentDecisionsForPolicy,
   getPolicyAggregate,
   type DecisionRow,
   type LedgerDb,
@@ -29,8 +31,13 @@ import {
   policies,
   runPolicy,
   issueTriagePolicy,
+  commentTriagePolicy,
+  runOutcomeQaPolicy,
   ISSUE_TYPE_CATALOG,
   type IssueTriageState,
+  type CommentTriageState,
+  type RunOutcomeQaState,
+  type RunOutcomeQaRunStatus,
   type RunPolicyResult,
   type Policy,
 } from "./policies/index.js";
@@ -47,8 +54,34 @@ import {
   type JevVerifyParams,
   type JevRerankParams,
 } from "./tools/schemas.js";
+import { guardEvaluateRequestSchema } from "./guard/types.js";
+import { evaluateGuard, fallbackDecision, POLICY_FOR_HOOK } from "./guard/evaluate.js";
+import { createGuardRateLimiter, type GuardRateLimiter } from "./guard/rateLimit.js";
+import { decideBrowserAction } from "./tools/browserDecision.js";
 
 const jevCache = createInMemoryJevCache();
+
+/** One rate limiter per company, sized from that company's own
+ * `guardRails.rateLimit` config the first time `guard/evaluate` sees it. A
+ * config change to the limits only takes effect on worker restart —
+ * acceptable for a DoS backstop whose defaults are the same for everyone. */
+const guardRateLimiters = new Map<string, GuardRateLimiter>();
+
+function guardRateLimiterFor(companyId: string, config: JevConfig): GuardRateLimiter {
+  let limiter = guardRateLimiters.get(companyId);
+  if (!limiter) {
+    limiter = createGuardRateLimiter(config.guardRails.rateLimit.requestsPerSecond, config.guardRails.rateLimit.tokensPerSecond);
+    guardRateLimiters.set(companyId, limiter);
+  }
+  return limiter;
+}
+
+/** Rough, cheap token estimate for the rate limiter — not the billed usage
+ * (that comes back from Jev itself after the call). Good enough to size a
+ * DoS backstop; off by 2x in either direction doesn't matter here. */
+function estimateRequestTokens(excerpt: string | undefined): number {
+  return 200 + Math.ceil((excerpt?.length ?? 0) / 4);
+}
 
 /** This plugin's own `originKind` — `preFilter` uses it to never triage an
  * issue the plugin itself created, matching `manifest.ts`'s `id`. */
@@ -59,6 +92,15 @@ function buildApplyDeps(ctx: PluginContext): ApplyDeps {
     log: (message, fields) => ctx.logger.info(message, fields),
     updateIssue: async ({ issueId, companyId, patch }) => {
       await ctx.issues.update(issueId, patch, companyId);
+    },
+    requestWakeup: async ({ issueId, companyId, reason }) => {
+      await ctx.issues.requestWakeup(issueId, companyId, { reason });
+    },
+    createComment: async ({ issueId, companyId, body }) => {
+      // No `authorAgentId`/`actorUserId` — resolves to `authorType: "system"`,
+      // which is exactly what keeps this from waking anyone or re-triggering
+      // `comment-triage` on the plugin's own comment (see its `preFilter`).
+      await ctx.issues.createComment(issueId, body, companyId);
     },
   };
 }
@@ -197,6 +239,144 @@ async function triageIssue(
   return result;
 }
 
+/**
+ * Builds the state `comment-triage` asks Jev about. Returns `null` when the
+ * issue or the specific comment can't be found (e.g. deleted between the
+ * event firing and the handler running) — the event payload's `bodySnippet`
+ * is truncated to 120 chars, so the comment is always re-fetched in full here
+ * rather than trusted from the event.
+ */
+async function buildCommentTriageState(
+  ctx: PluginContext,
+  companyId: string,
+  issueId: string,
+  commentId: string,
+): Promise<CommentTriageState | null> {
+  const issue = await ctx.issues.get(issueId, companyId);
+  if (!issue) return null;
+
+  const comments = await ctx.issues.listComments(issueId, companyId);
+  const comment = comments.find((c) => c.id === commentId);
+  if (!comment) return null;
+
+  return {
+    issueId,
+    commentId,
+    commentBody: comment.body,
+    authorType: comment.authorType,
+    issueTitle: issue.title,
+    issueDescription: issue.description,
+    hasAssignee: Boolean(issue.assigneeAgentId || issue.assigneeUserId),
+    isPluginOrigin: issue.originKind === PLUGIN_ORIGIN_KIND,
+  };
+}
+
+/** Shared entry point for `comment-triage`'s only trigger (`issue.comment.created`). */
+async function triageComment(
+  ctx: PluginContext,
+  companyId: string,
+  issueId: string,
+  commentId: string,
+): Promise<RunPolicyResult | null> {
+  const config = await loadConfig(ctx, companyId);
+  const policyConfig = policyConfigFor(config, commentTriagePolicy.name);
+  if (!policyConfig.enabled) return null;
+
+  const state = await buildCommentTriageState(ctx, companyId, issueId, commentId);
+  if (!state) return null;
+
+  const client = buildClient(ctx, config);
+  return runPolicy(
+    { policy: commentTriagePolicy, state, config, companyId, issueId },
+    { client, db: ctx.db, apply: buildApplyDeps(ctx), suggest: buildSuggestDeps(ctx) },
+  );
+}
+
+/**
+ * Builds the state `run-outcome-qa` asks Jev about. The run lifecycle event
+ * payload carries no comment/description text (just run metadata), so the
+ * issue and its comments are always re-fetched here. The "final comment" is
+ * the run's own last comment, matched by `createdByRunId` — never inferred
+ * from timing or agent id — so a concurrent comment from someone else on the
+ * same issue can never be mistaken for this run's own claim.
+ */
+async function buildRunOutcomeQaState(
+  ctx: PluginContext,
+  companyId: string,
+  issueId: string,
+  runId: string,
+  runStatus: RunOutcomeQaRunStatus,
+): Promise<RunOutcomeQaState | null> {
+  const issue = await ctx.issues.get(issueId, companyId);
+  if (!issue) return null;
+
+  const comments = await ctx.issues.listComments(issueId, companyId);
+  const runComments = comments
+    .filter((comment) => comment.createdByRunId === runId)
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  const finalComment = runComments.length > 0 ? runComments[runComments.length - 1] : null;
+
+  return {
+    issueId,
+    runId,
+    runStatus,
+    finalCommentBody: finalComment?.body ?? null,
+    issueTitle: issue.title,
+    issueDescription: issue.description,
+    isPluginOrigin: issue.originKind === PLUGIN_ORIGIN_KIND,
+  };
+}
+
+/** Shared entry point for `run-outcome-qa`'s triggers (`agent.run.finished`/`agent.run.failed`). */
+async function triageRunOutcome(
+  ctx: PluginContext,
+  companyId: string,
+  issueId: string,
+  runId: string,
+  runStatus: RunOutcomeQaRunStatus,
+): Promise<RunPolicyResult | null> {
+  const config = await loadConfig(ctx, companyId);
+  const policyConfig = policyConfigFor(config, runOutcomeQaPolicy.name);
+  if (!policyConfig.enabled) return null;
+
+  const state = await buildRunOutcomeQaState(ctx, companyId, issueId, runId, runStatus);
+  if (!state) return null;
+
+  const client = buildClient(ctx, config);
+  return runPolicy(
+    { policy: runOutcomeQaPolicy, state, config, companyId, issueId, runId },
+    { client, db: ctx.db, apply: buildApplyDeps(ctx), suggest: buildSuggestDeps(ctx) },
+  );
+}
+
+/** Shared handler for both `agent.run.finished` and `agent.run.failed` —
+ * the payload shape is identical for both (`publishRunLifecyclePluginEventData`
+ * picks the event type from `status`, not the other way around). */
+async function handleRunLifecycleEvent(ctx: PluginContext, event: PluginEvent): Promise<void> {
+  const payload = event.payload as Record<string, unknown>;
+  const issueId = typeof payload.issueId === "string" ? payload.issueId : null;
+  const runId = typeof payload.runId === "string" ? payload.runId : (event.entityId ?? null);
+  const status = payload.status;
+  const runStatus: RunOutcomeQaRunStatus | null =
+    status === "succeeded" || status === "failed" || status === "timed_out" ? status : null;
+  if (!issueId || !runId || !runStatus) return;
+
+  const acquired = await acquireLease(ctx.state, `run-outcome-qa:${event.eventId}`);
+  if (!acquired) {
+    ctx.logger.debug("jev.run-outcome-qa.event.duplicate", { eventId: event.eventId });
+    return;
+  }
+  try {
+    await triageRunOutcome(ctx, event.companyId, issueId, runId, runStatus);
+  } catch (error) {
+    ctx.logger.error("jev.run-outcome-qa.run-failed", {
+      issueId,
+      runId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 /** Lifecycle hooks other than `setup` receive no `ctx` argument, so `setup`
  * captures it here for `onApiRequest` (and any future out-of-band hook) to use. */
 let currentContext: PluginContext | undefined;
@@ -303,6 +483,57 @@ function requireCompanyId(params: Record<string, unknown>): string {
   return companyId;
 }
 
+/** Handles `POST /guard/evaluate` for the harness hooks. Body shape is
+ * validated here (never trusted from the request) before anything else runs;
+ * the rate limiter is consulted before the issue fetch / Jev call so a
+ * rate-limited caller never costs more than a map lookup and a bucket check. */
+async function handleGuardEvaluate(ctx: PluginContext, input: PluginApiRequestInput): Promise<PluginApiResponse> {
+  const parsed = guardEvaluateRequestSchema.safeParse(input.body);
+  if (!parsed.success) {
+    return { status: 400, body: { error: "invalid guard/evaluate request", issues: parsed.error.issues } };
+  }
+  const request = parsed.data;
+
+  const config = await loadConfig(ctx, input.companyId);
+  const policyConfig = policyConfigFor(config, POLICY_FOR_HOOK[request.hookKind].name);
+  const limiter = guardRateLimiterFor(input.companyId, config);
+  if (!limiter.tryConsume(input.companyId, estimateRequestTokens(request.excerpt))) {
+    // Reuse the same fail-closed logic a Jev timeout/error would hit, so a
+    // caller can't bypass `enforce`-mode blocking by flooding the route past
+    // the rate limit: a 429 carries the policy's fallback decision in its
+    // body rather than leaving the hook client to default to "allow".
+    const decision = fallbackDecision(request.hookKind, policyConfig.mode);
+    return { status: 429, body: { error: "rate limit exceeded", decision, reason: "rate-limited" } };
+  }
+
+  const client = buildClient(ctx, config);
+  const issue = request.issueId ? await ctx.issues.get(request.issueId, input.companyId) : null;
+
+  // `input.actor.runId` is the host-authenticated run id; `request.runId` is
+  // attacker-controlled request-body content. Prefer the authenticated value
+  // so the loop guard can't be defeated by an agent sending a fresh runId on
+  // every call. Falls back to the body value when the host doesn't surface
+  // an actor runId for this route — see docs/SECURITY.md for that gap.
+  const effectiveRequest = input.actor.runId ? { ...request, runId: input.actor.runId } : request;
+
+  const result = await evaluateGuard(effectiveRequest, {
+    client,
+    db: ctx.db,
+    config,
+    companyId: input.companyId,
+    agentId: input.actor.agentId ?? null,
+    issue: issue ? { title: issue.title, description: issue.description } : null,
+    rails: {
+      state: ctx.state,
+      interactions: {
+        listInteractions: (issueId, companyId) => ctx.issues.listInteractions(issueId, companyId),
+      },
+    },
+  });
+
+  return { status: 200, body: result };
+}
+
 const plugin = definePlugin({
   multiCompanyConfig: true,
 
@@ -391,6 +622,43 @@ const plugin = definePlugin({
       }
     });
 
+    ctx.events.on("issue.comment.created", async (event) => {
+      // The entity here is the issue (comment-creation activity logs
+      // `entityType: "issue"`), not the comment — the comment id only ever
+      // appears inside the payload.
+      const issueId = event.entityId;
+      const payload = event.payload as Record<string, unknown>;
+      const commentId = typeof payload.commentId === "string" ? payload.commentId : "";
+      if (!issueId || !commentId) return;
+      const acquired = await acquireLease(ctx.state, `comment-triage:${event.eventId}`);
+      if (!acquired) {
+        ctx.logger.debug("jev.comment-triage.event.duplicate", { eventId: event.eventId });
+        return;
+      }
+      try {
+        const result = await triageComment(ctx, event.companyId, issueId, commentId);
+        if (result && result.outcome !== "skipped") {
+          // Structured fields only — never the comment body or issue text.
+          await ctx.events.emit("comment.classified", event.companyId, {
+            issueId,
+            commentId,
+            verdict: result.verdict.verdict,
+            confidence: result.verdict.confidence,
+            margin: result.verdict.margin,
+          });
+        }
+      } catch (error) {
+        ctx.logger.error("jev.comment-triage.run-failed", {
+          issueId,
+          commentId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+
+    ctx.events.on("agent.run.finished", (event) => handleRunLifecycleEvent(ctx, event));
+    ctx.events.on("agent.run.failed", (event) => handleRunLifecycleEvent(ctx, event));
+
     ctx.actions.register("triage-issue", async (params, context: PluginPerformActionContext) => {
       const issueId = typeof params.issueId === "string" ? params.issueId : "";
       const companyId = context.companyId;
@@ -461,6 +729,12 @@ const plugin = definePlugin({
       // straight through and break the SQL `LIMIT`.
       const limit = Number.isInteger(params.limit) ? (params.limit as number) : undefined;
       return listDecisionHistory(ctx.db, companyId, issueId, limit);
+    });
+
+    ctx.data.register("comment-triage-feed", async (params) => {
+      const companyId = requireCompanyId(params);
+      const limit = Number.isInteger(params.limit) ? (params.limit as number) : undefined;
+      return listRecentDecisionsForPolicy(ctx.db, companyId, commentTriagePolicy.name, limit);
     });
 
     ctx.jobs.register("daily-budget-report", async (job) => {
@@ -580,6 +854,72 @@ const plugin = definePlugin({
           { runId: runCtx.runId, agentId: runCtx.agentId },
         );
         return outcome.ok ? { content: JSON.stringify(outcome.result), data: outcome.result } : { error: outcome.error };
+      },
+    );
+
+    ctx.tools.register(
+      "jev-decide-browser-action",
+      {
+        displayName: "Jev Decide Browser Action",
+        description:
+          "Given a goal, a page URL, and an indexed element table, returns one advisory action from a closed " +
+          "space plus the target element index. Never performs the action.",
+        parametersSchema: {
+          type: "object",
+          properties: {
+            issueId: { type: "string" },
+            goal: { type: "string" },
+            url: { type: "string" },
+            elements: { type: "array", items: { type: "object" } },
+          },
+          required: ["goal", "url", "elements"],
+        },
+      },
+      async (params, runCtx) => {
+        const config = await loadConfig(ctx, runCtx.companyId);
+        const client = buildClient(ctx, config);
+        const result = await decideBrowserAction(params, {
+          client,
+          db: ctx.db,
+          config,
+          companyId: runCtx.companyId,
+          runId: runCtx.runId,
+          agentId: runCtx.agentId,
+          log: (message, fields) => ctx.logger.info(message, fields),
+          findConfirmation: async (input) => {
+            const interactions = await ctx.issues.listInteractions(input.issueId, runCtx.companyId);
+            const match = interactions.find(
+              (interaction) => interaction.kind === "request_confirmation" && interaction.idempotencyKey === input.idempotencyKey,
+            );
+            if (!match) return null;
+            return { id: match.id, status: match.status };
+          },
+          requestConfirmation: async (input) => {
+            const interaction = await ctx.issues.requestConfirmation(
+              input.issueId,
+              {
+                idempotencyKey: input.idempotencyKey,
+                resolverPolicy: "human_only",
+                continuationPolicy: "wake_assignee_on_accept",
+                payload: {
+                  version: 1,
+                  prompt:
+                    `Jev recommends "${input.action}" on ${input.url} for goal "${input.goal}". This may involve ` +
+                    "payment, credentials, or a destructive change — confirm before the harness proceeds.",
+                  acceptLabel: "Allow",
+                  rejectLabel: "Block",
+                  allowDeclineReason: true,
+                  detailsMarkdown:
+                    `**Goal:** ${input.goal}\n\n**Action:** ${input.action}\n\n**Target element index:** ` +
+                    `${input.targetIndex ?? "none"}\n\n**URL:** ${input.url}`,
+                },
+              },
+              input.companyId,
+            );
+            return { interactionId: interaction.id };
+          },
+        });
+        return { content: JSON.stringify(result), data: result };
       },
     );
   },
@@ -733,6 +1073,8 @@ const plugin = definePlugin({
           ? { status: 200, body: outcome.result }
           : { status: statusForToolError(outcome.error), body: { error: outcome.error } };
       }
+      case "guard-evaluate":
+        return handleGuardEvaluate(ctx, input);
       default:
         return { status: 404, body: { error: `unknown route: ${input.routeKey}` } };
     }
