@@ -46,6 +46,20 @@ src/
       presets.ts       Named SystemOne presets (base URL, path, auth style,
                       caps, verification tier, rate card, disclosure). Only
                       `typesafe` in G1; G4 adds the rest.
+      cloudflare.ts    Workers AI adapter for Clef / Clef Flash
+                      (`/accounts/{accountId}/ai/run/@cf/cloudflare/{model}`):
+                      SystemOne body, Cloudflare envelope unwrapped. 64
+                      questions, 26 options, context-derived byte caps.
+      openai.ts        OpenAI Decisions adapter (`/v1/decisions`). Translates
+                      boolean <-> predicate (criteria folded into the
+                      instructions), choice maps <-> `choices[]`, score
+                      criteria <-> index-labelled `levels`; rescales its
+                      two-decimal probabilities; a `refusal` answer throws
+                      `DecisionRefusalError`. Questions keep the policy's
+                      order: the model is order sensitive.
+      http.ts          JSON client for the two adapters above: per-attempt
+                      timeout, bounded retries on 408/429/5xx with
+                      `Retry-After`, errors carry the status only.
       core.ts          Feature-detects a plugin-facing `ctx.decisions.decide`
                       on the host. Absent on every released core, so
                       `availability()` is `{ok: false, reason: "unavailable
@@ -251,7 +265,11 @@ can be re-acquired afterward (covered by `tests/ledger.spec.ts`).
 
 Then, for each provider in the policy's `[primary, ...fallbacks]` chain:
 
-5. **Capability pre-check** against the provider's caps (question types,
+5. **Option capping** for ranked choice questions (`Policy.rankChoices`,
+   e.g. `issue-triage`'s `owner` and `duplicateOf`): trimmed to this
+   provider's `maxChoiceOptions`, keeping pinned sentinels and the
+   best-ranked candidates.
+   **Capability pre-check** against the provider's caps (question types,
    question count, choice options, score levels, request bytes). A miss
    moves on to the next provider without a call; if no provider fits,
    `runPolicy` records `skipped` with a bounded reason code
@@ -266,22 +284,30 @@ Then, for each provider in the policy's `[primary, ...fallbacks]` chain:
    budget is already exhausted.
 8. **Bounded concurrency**: the provider call runs through a semaphore
    (default max 6 concurrent).
-9. **Provider call**: `provider.decide()` under a total wall-clock budget
-   (`AbortSignal.timeout`). For `systemone`, that is `@typesafe-ai/sdk`'s
+9. **Provider call**: `provider.decide()` under the chain's shared
+   wall-clock budget (`totalBudgetMs`, one `AbortSignal.timeout` measured
+   from the start of `ask`, so a fallback only gets what the providers
+   before it left). For `systemone`, that is `@typesafe-ai/sdk`'s
    `TypeSafeClient.systemOne()` with the SDK's own retry/backoff (honoring
    `Retry-After`) and per-attempt timeout, the preset's path and auth
    header, and strict validation against `verdictAskResultSchema` (a model-echo
-   mismatch or malformed answer throws `VerdictValidationError`). Any failure
-   moves on to the next provider; the first real failure is rethrown if all
-   fail.
+   mismatch or malformed answer throws `VerdictValidationError`). A failure
+   moves on to the next provider only when its `ErrorClass` allows it:
+   `transport`, `timeout`, `http_5xx`, `rate_limited`, `unavailable` and
+   `invalid_output` fall back; `refusal`, `auth_config` (incl. a blocked
+   egress), `invalid_request` (other 4xx), `budget_exceeded` and `unknown`
+   stop the chain. The first real failure is rethrown.
 10. **Budget + cost accounting**: usage is added to the daily budget store;
     cost and `rateVersion` come from the provider's rate card (`rates.ts`).
     Host-billed providers record null cost and no rate version.
 11. **Cache write** on success.
 
-The outcome names the provider that answered. `runPolicy`, `guard/evaluate`
-and `verdict:decide-browser-action` record it in the ledger and, if a fallback
-answered, re-resolve thresholds and mode for it.
+The outcome names the provider that answered, the chain head it was meant
+for, and why the chain moved on (`fallbackFrom`). `runPolicy`,
+`guard/evaluate` and `verdict:decide-browser-action` record them in the
+ledger (`provider`, `requested_provider`, `fallback_from`; `error_class` on
+error rows) and, if a fallback answered, re-resolve thresholds and mode for
+it.
 
 Provider keys are obtained only through the registry's `resolveSecret`,
 which `worker.ts` wires to `ctx.secrets.resolve(apiKeyRef)` — never
@@ -306,6 +332,15 @@ stays observe-only on another until it is calibrated there (G5).
   redaction, no raw state in the ledger, error mapping, timeout, cost and
   rate version. `core` runs the same contract against a fake host SDK that
   exposes and withholds `ctx.decisions`.
+  `tests/provider-contract-tier-a.spec.ts` runs the same assertions
+  against mock Workers AI and OpenAI Decisions servers, plus envelope,
+  translation and refusal mapping.
+- **L2 recorded fixtures** (`tests/fixtures/<provider>/`, replayed by
+  `tests/provider-fixtures.spec.ts` in CI): captured once from TypeSafe,
+  Cloudflare (clef, clef-flash) and OpenAI by `pnpm fixtures:record` and
+  scrubbed (headers dropped; account id, UUIDs, request ids and any state
+  echo replaced; the run aborts if a token survives). The adapter must send
+  the recorded request and parse the recorded reply.
 - **L3 live smoke** (`pnpm test:live`, `tests/live/`): ping, `listModels`,
   one boolean, one choice, one score and one refusal per provider whose
   `VERDICT_LIVE_<PROVIDER>_TOKEN` is set in a gitignored local `.env` (see
@@ -317,7 +352,7 @@ Company-scoped, validated by `src/config.ts` (`parseVerdictConfig`):
 
 | Field | Default | Notes |
 |---|---|---|
-| `providers.<id>` | — | `{kind: "systemone", preset, apiKeyRef, model?, baseUrl?, path?, authStyle?}` or `{kind: "core", model?}`. Ids are lowercase letters, digits, dashes |
+| `providers.<id>` | — | `{kind: "systemone", preset, apiKeyRef, model?, baseUrl?, path?, authStyle?}`, `{kind: "cloudflare", accountId, apiKeyRef, model?: "clef" \| "clef-flash", baseUrl?}`, `{kind: "openai", apiKeyRef, model? (gpt-6-luna), baseUrl?}` or `{kind: "core", model?}`. Ids are lowercase letters, digits, dashes. Provider fetches only reach the origins of configured providers |
 | `defaultProvider` | `typesafe` (or the first provider) | Used by every policy without its own `provider` |
 | `shadowProviders` | `[]` | Resolved by the registry; called alongside the primary from G5 |
 | `apiKeyRef` | — | Deprecated. With an empty `providers` map, read as `providers.typesafe.apiKeyRef` (warning in `onValidateConfig`) |

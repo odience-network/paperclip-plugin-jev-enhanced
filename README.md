@@ -15,13 +15,37 @@ per company and can be overridden per policy, with fallback chains. See
 | Provider | Kind / preset | Default model | Verification |
 |---|---|---|---|
 | TypeSafe | `systemone` / `typesafe` | `jev-1.13.0` | live |
+| Cloudflare Workers AI (Clef, Clef Flash) | `cloudflare` (`accountId` + token) | `clef-flash` (or `clef`) | live |
+| OpenAI Decisions (GPT-6 Luna) | `openai` | `gpt-6-luna` | live |
 | Paperclip core | `core` (feature-detected, unavailable on released hosts) | host-chosen | fixtures |
 
 "live" means the provider is exercised by the env-gated live smoke test
-(`pnpm test:live`) as well as the mock-server contract suite; "fixtures"
-means contract tests and recorded or docs-derived fixtures only. Cloudflare
-Workers AI, OpenAI Decisions and the remaining SystemOne presets land in
-G3/G4 and are added here with their tier.
+(`pnpm test:live`), by scrubbed recordings replayed in CI
+(`tests/fixtures/<provider>/`) and by the mock-server contract suite;
+"fixtures" means contract tests and recorded or docs-derived fixtures only.
+The remaining SystemOne presets land in G4 and are added here with their tier.
+
+Example, all three Tier A providers with TypeSafe as the default:
+
+```jsonc
+{
+  "providers": {
+    "typesafe": { "kind": "systemone", "preset": "typesafe", "apiKeyRef": "<secret-ref>" },
+    "cf-clef":  { "kind": "cloudflare", "accountId": "<32-hex account id>", "apiKeyRef": "<secret-ref>", "model": "clef-flash" },
+    "luna":     { "kind": "openai", "apiKeyRef": "<secret-ref>" }
+  },
+  "defaultProvider": "typesafe",
+  "policies": { "issue-triage": { "fallbackProviders": ["cf-clef"] } }
+}
+```
+
+Each provider's disclosure (which host receives state text, and its
+published retention) is shown in the settings schema and next to the
+provider in the dashboard widget: Cloudflare does not store or train on
+requests; OpenAI is ZDR eligible with EU residency available. Provider
+calls can only reach the hosts of configured providers. OpenAI's
+`refusal` answers fail the call with error code `refused`; they are never
+turned into an answer, and the chain does not fall back on them.
 
 ### Secrets
 
