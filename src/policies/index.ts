@@ -32,6 +32,15 @@ export {
   type RunOutcomeQaRunStatus,
 } from "./run-outcome-qa.js";
 export { runPolicy, type RunPolicyInput, type RunPolicyDeps, type RunPolicyResult } from "./run.js";
+export {
+  browserActionPolicy,
+  BROWSER_ACTIONS,
+  resolveTargetIndex,
+  resolveSensitive,
+  type BrowserAction,
+  type BrowserElement,
+  type BrowserActionState,
+} from "./browserAction.js";
 
 import { pingPolicy } from "./ping.js";
 import { issueTriagePolicy } from "./issue-triage.js";
@@ -44,6 +53,7 @@ import { guardPostPolicy } from "../guard/post.js";
 import { guardStopPolicy } from "../guard/stop.js";
 import { commentTriagePolicy } from "./comment-triage.js";
 import { runOutcomeQaPolicy } from "./run-outcome-qa.js";
+import { browserActionPolicy } from "./browserAction.js";
 import type { Policy } from "./types.js";
 
 /** Every policy this plugin ships, keyed by `policy.name`. Add new policies
@@ -60,4 +70,5 @@ export const policies: Record<string, Policy<any>> = {
   [guardStopPolicy.name]: guardStopPolicy,
   [commentTriagePolicy.name]: commentTriagePolicy,
   [runOutcomeQaPolicy.name]: runOutcomeQaPolicy,
+  [browserActionPolicy.name]: browserActionPolicy,
 };

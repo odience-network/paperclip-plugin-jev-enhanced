@@ -165,6 +165,15 @@ async function applyRunOutcomeQa(input: ApplyInput, deps: ApplyDeps): Promise<vo
   deps.log("jev.apply.run-outcome-qa", { issueId, verdict: input.verdict.verdict });
 }
 
+/**
+ * `browser-action` has nothing to apply here either: the tool is advisory by
+ * construction — the harness, never this plugin, drives the browser. This
+ * only logs the recommended action for observability.
+ */
+async function applyBrowserAction(input: ApplyInput, deps: ApplyDeps): Promise<void> {
+  deps.log("jev.apply.browser-action", { verdict: input.verdict.verdict, issueId: input.ctx.issueId ?? null });
+}
+
 export const applyHandlers: Record<string, ApplyFn> = {
   ping: applyPing,
   "issue-triage": applyIssueTriage,
@@ -177,6 +186,7 @@ export const applyHandlers: Record<string, ApplyFn> = {
   "guard-stop": applyGuard,
   "comment-triage": applyCommentTriage,
   "run-outcome-qa": applyRunOutcomeQa,
+  "browser-action": applyBrowserAction,
 };
 
 export async function applyDecision(input: ApplyInput, deps: ApplyDeps): Promise<void> {
