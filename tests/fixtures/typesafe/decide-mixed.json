@@ -1,0 +1,80 @@
+{
+  "source": "recorded",
+  "recordedAt": "2026-11-11",
+  "provider": "typesafe",
+  "model": "jev-1.13.0",
+  "name": "decide-mixed",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "body": {
+      "state": "<state>",
+      "questions": {
+        "is_bug": {
+          "type": "noul",
+          "instructions": "Is this a bug report?"
+        },
+        "area": {
+          "type": "choice",
+          "instructions": "Which area is affected?",
+          "criteria": {
+            "frontend": "UI",
+            "backend": "Server or API",
+            "docs": null
+          }
+        },
+        "severity": {
+          "type": "score",
+          "instructions": "How severe is this?",
+          "criteria": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      },
+      "model": "jev-1.13.0"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "model": "jev-1.13.0",
+      "answers": {
+        "is_bug": {
+          "type": "noul",
+          "noul": 0.97
+        },
+        "area": {
+          "type": "choice",
+          "choice": "backend",
+          "confidence": 0.97,
+          "probabilities": {
+            "frontend": 0.02,
+            "backend": 0.98,
+            "docs": 0
+          }
+        },
+        "severity": {
+          "type": "score",
+          "score": 2,
+          "confidence": 1,
+          "legend": {
+            "0": "low",
+            "1": "medium",
+            "2": "high"
+          },
+          "probabilities": {
+            "0": 0,
+            "1": 0,
+            "2": 1
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 389,
+        "output_tokens": 69
+      }
+    }
+  }
+}
