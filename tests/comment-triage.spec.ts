@@ -294,7 +294,12 @@ describe("commentTriagePolicy via runPolicy", () => {
     expect(result).toMatchObject({ outcome: "applied" });
     expect(requestWakeup).toHaveBeenCalledTimes(1);
     expect(requestWakeup).toHaveBeenCalledWith(
-      expect.objectContaining({ issueId: "issue_1", companyId: "company_1", reason: "jev.comment-triage.blocker" }),
+      expect.objectContaining({
+        issueId: "issue_1",
+        companyId: "company_1",
+        reason: "jev.comment-triage.blocker",
+        idempotencyKey: "jev:comment-triage:comment_1",
+      }),
     );
   });
 
