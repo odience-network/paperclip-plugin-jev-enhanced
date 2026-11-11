@@ -4,6 +4,7 @@ import { createTypesafePipeline } from "../src/decision/registry.js";
 import type { DecisionPipeline } from "../src/decision/pipeline.js";
 import { commentTriagePolicy, type CommentTriageState } from "../src/policies/comment-triage.js";
 import { runPolicy } from "../src/policies/run.js";
+import { commentOriginOf } from "../src/policies/util.js";
 import type { PolicyContext } from "../src/policies/types.js";
 import type { VerdictAnswer } from "../src/decision/types.js";
 import { verdictConfigSchema, type VerdictConfig } from "../src/config.js";
@@ -55,6 +56,7 @@ function baseState(overrides: Partial<CommentTriageState> = {}): CommentTriageSt
     issueDescription: "Ship the new pricing page behind a flag.",
     hasAssignee: true,
     isPluginOrigin: false,
+    origin: "comment",
     ...overrides,
   };
 }
@@ -105,6 +107,22 @@ describe("commentTriagePolicy.preFilter", () => {
   it("does not skip an agent-authored comment", () => {
     const state = baseState({ authorType: "agent" });
     expect(commentTriagePolicy.preFilter(state, baseCtx())).toBe(true);
+  });
+
+  it("skips a Paperclip fast-response receipt even though it is agent-authored", () => {
+    const state = baseState({ authorType: "agent", origin: "fast_response" });
+    expect(commentTriagePolicy.preFilter(state, baseCtx())).toBe(false);
+  });
+
+  it("still triages an ordinary agent comment", () => {
+    const state = baseState({ authorType: "agent", origin: "comment" });
+    expect(commentTriagePolicy.preFilter(state, baseCtx())).toBe(true);
+  });
+
+  it("treats a missing origin (older cores) as an ordinary comment", () => {
+    const { origin: _origin, ...state } = baseState({ authorType: "agent" });
+    expect(commentOriginOf(state)).toBe("comment");
+    expect(commentTriagePolicy.preFilter(state as CommentTriageState, baseCtx())).toBe(true);
   });
 
   it("skips when the state hash matches the prior decision's state hash", () => {
@@ -321,6 +339,30 @@ describe("commentTriagePolicy via runPolicy", () => {
     );
 
     expect(result).toMatchObject({ outcome: "applied" });
+    expect(requestWakeup).not.toHaveBeenCalled();
+  });
+
+  it("skips a fast-response receipt in enforce mode: no provider call, no ledger row, no wakeup", async () => {
+    const fetchImpl = vi.fn<Fetch>();
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
+    const db = createFakeDb();
+    const execute = vi.spyOn(db, "execute");
+    const requestWakeup = vi.fn();
+
+    const result = await runPolicy(
+      {
+        policy: commentTriagePolicy,
+        state: baseState({ authorType: "agent", origin: "fast_response", hasAssignee: true }),
+        config: configFor("enforce"),
+        companyId: "company_1",
+        issueId: "issue_1",
+      },
+      { client, db, apply: { log: vi.fn(), requestWakeup }, suggest: { log: vi.fn() } },
+    );
+
+    expect(result).toEqual({ outcome: "skipped", reason: "pre-filter" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
     expect(requestWakeup).not.toHaveBeenCalled();
   });
 

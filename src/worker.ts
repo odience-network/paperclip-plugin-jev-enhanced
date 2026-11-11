@@ -60,6 +60,7 @@ import {
   type RunPolicyResult,
   type Policy,
 } from "./policies/index.js";
+import { commentOriginOf, isFastResponseReceipt } from "./policies/util.js";
 import type { ApplyDeps } from "./apply/index.js";
 import type { SuggestDeps } from "./suggest/index.js";
 import { runDecisionTool, statusForToolError } from "./tools/runTool.js";
@@ -288,6 +289,7 @@ async function buildCommentTriageState(
     issueDescription: issue.description,
     hasAssignee: Boolean(issue.assigneeAgentId || issue.assigneeUserId),
     isPluginOrigin: issue.originKind === PLUGIN_ORIGIN_KIND,
+    origin: commentOriginOf(comment),
   };
 }
 
@@ -331,8 +333,10 @@ async function buildRunOutcomeQaState(
   if (!issue) return null;
 
   const comments = await ctx.issues.listComments(issueId, companyId);
+  // A fast-response receipt is never the run's own claim, even if core ever
+  // stamps it with this run's id.
   const runComments = comments
-    .filter((comment) => comment.createdByRunId === runId)
+    .filter((comment) => comment.createdByRunId === runId && !isFastResponseReceipt(comment))
     .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   const finalComment = runComments.length > 0 ? runComments[runComments.length - 1] : null;
 
