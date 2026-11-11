@@ -3,15 +3,17 @@ import { redactText, truncateHeadTail, DEFAULT_MAX_STATE_CHARS } from "./redact.
 import { cacheKeyFor, type VerdictCache } from "./cache.js";
 import { BudgetExceededError, utcDateKey, type BudgetStore } from "./budget.js";
 import { Semaphore } from "./semaphore.js";
-import { CapabilityError, type CapabilityReason } from "./errors.js";
+import { CapabilityError, errorClassOf, shouldFallBack, type CapabilityReason, type ErrorClass } from "./errors.js";
 import type { DecisionProvider, ModelCard, ProviderKind } from "./provider.js";
 import { canonicalQuestionType, type DecisionQuestions, type DecisionResult } from "./types.js";
 
 export interface DecisionPipelineOptions {
   /** `[primary, ...fallbacks]`, tried in order. At least one. */
   providers: readonly DecisionProvider[];
-  /** Total wall-clock budget for one provider call across all its retries, in
-   * milliseconds (the SDK only bounds each individual attempt). */
+  /** Total wall-clock budget for one `ask`, in milliseconds: shared by every
+   * provider in the chain and all their retries (the adapters only bound each
+   * individual attempt). A fallback gets whatever the providers before it left;
+   * once it is spent no further provider is tried. */
   totalBudgetMs?: number;
   maxConcurrency?: number;
   dailyTokenBudget?: number;
@@ -39,6 +41,12 @@ export interface VerdictAskOutcome {
   rateVersion: string | null;
   /** The provider that actually answered — a fallback if the primary failed. */
   provider: DecisionProvider;
+  /** The chain head the call was meant for. */
+  requestedProvider: DecisionProvider;
+  /** Why the chain moved on from the provider before the one that answered:
+   * an `ErrorClass`, or a capability reason code for a pre-check skip. `null`
+   * when the primary answered. */
+  fallbackFrom: ErrorClass | CapabilityReason | null;
   hostInvocationId: string | null;
 }
 
@@ -73,8 +81,12 @@ export function checkCapabilities(
  * Provider-agnostic ask pipeline: canonicalize, redact, truncate, hash, check
  * the cache and daily budget, call the provider under bounded concurrency and
  * a total time budget, then account cost and cache the validated result. The
- * provider call is the only provider-specific step. On failure the next
- * provider in the chain is tried; a capability mismatch skips straight to it.
+ * provider call is the only provider-specific step.
+ *
+ * Fallback: a capability mismatch skips straight to the next provider; a
+ * failure moves on only when its `ErrorClass` is one `shouldFallBack` allows
+ * (outages and invalid output, never a refusal, auth/config error or budget
+ * stop), and only while the chain's shared `totalBudgetMs` lasts.
  */
 export class DecisionPipeline {
   private readonly providers: readonly DecisionProvider[];
@@ -129,17 +141,25 @@ export class DecisionPipeline {
 
     // Surface the first real provider failure; a capability skip only wins
     // when no provider in the chain could take the request at all.
+    const deadline = started + this.totalBudgetMs;
     const failures: unknown[] = [];
+    let fallbackFrom: VerdictAskOutcome["fallbackFrom"] = null;
     for (const provider of this.providers) {
+      if (failures.length > 0 && Date.now() >= deadline) break;
       const capabilityReason = checkCapabilities(provider, input.questions, requestBytes);
       if (capabilityReason) {
         failures.push(new CapabilityError(capabilityReason, provider.id));
+        fallbackFrom ??= capabilityReason;
         continue;
       }
       try {
-        return await this.askProvider(provider, input, { truncated, stateHash, questionsHash, started });
+        const outcome = await this.askProvider(provider, input, { truncated, stateHash, questionsHash, started, deadline });
+        return { ...outcome, requestedProvider: this.primary, fallbackFrom };
       } catch (error) {
         failures.push(error);
+        const errorClass = errorClassOf(error);
+        if (!shouldFallBack(errorClass)) break;
+        fallbackFrom ??= errorClass;
       }
     }
     throw failures.find((error) => !(error instanceof CapabilityError)) ?? failures[0];
@@ -152,9 +172,9 @@ export class DecisionPipeline {
   private async askProvider(
     provider: DecisionProvider,
     input: VerdictAskInput,
-    prepared: { truncated: string; stateHash: string; questionsHash: string; started: number },
-  ): Promise<VerdictAskOutcome> {
-    const { truncated, stateHash, questionsHash, started } = prepared;
+    prepared: { truncated: string; stateHash: string; questionsHash: string; started: number; deadline: number },
+  ): Promise<Omit<VerdictAskOutcome, "requestedProvider" | "fallbackFrom">> {
+    const { truncated, stateHash, questionsHash, started, deadline } = prepared;
     const hostBilled = provider.capabilities.billing === "host";
     const cacheKey = cacheKeyFor({
       policy: input.policy,
@@ -190,7 +210,9 @@ export class DecisionPipeline {
     const { hostInvocationId, ...result } = await this.semaphore.run(() =>
       provider.decide(
         { state: truncated, questions: input.questions, model: provider.model },
-        { signal: AbortSignal.timeout(this.totalBudgetMs) },
+        // Measured once the semaphore admits the call, so queueing counts
+        // against the chain's budget too.
+        { signal: AbortSignal.timeout(Math.max(deadline - Date.now(), 1)) },
       ),
     );
     const cost = hostBilled ? null : (provider.estimateCostUsd?.(result.usage) ?? null);
@@ -223,6 +245,7 @@ export function answeredByFields(outcome: VerdictAskOutcome) {
     provider: outcome.provider.id,
     providerKind: outcome.provider.kind,
     model: outcome.result.model,
+    fallbackFrom: outcome.fallbackFrom,
     rateVersion: outcome.rateVersion,
     hostInvocationId: outcome.hostInvocationId,
   };

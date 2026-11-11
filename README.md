@@ -60,7 +60,8 @@ A failure (invalid params, a budget-exhausted company, no API key bound, or
 a provider/validation error) never throws — it comes back as a typed error
 string (tool: `{error: "<code>"}`; route: an error-appropriate HTTP status
 with `{error: "<code>"}`). Common codes: `invalid-params` (400),
-`missing-api-key` (412), `budget-exceeded` (429), `validation-failed` (502).
+`missing-api-key` (412), `budget-exceeded` (429), `refused` (422, the provider
+declined to answer), `validation-failed` (502).
 
 ### `verdict-ask` — `POST /tools/ask`
 

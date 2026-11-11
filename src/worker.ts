@@ -23,6 +23,7 @@ import {
   buildProvider,
   defaultProviderId,
   effectiveProviders,
+  providerBinding,
   validateProviderConfig,
   type ProviderRuntime,
 } from "./decision/registry.js";
@@ -516,7 +517,12 @@ async function handleGuardEvaluate(ctx: PluginContext, input: PluginApiRequestIn
   const request = parsed.data;
 
   const config = await loadConfig(ctx, input.companyId);
-  const policyConfig = policyConfigFor(config, POLICY_FOR_HOOK[request.hookKind].name);
+  const policyName = POLICY_FOR_HOOK[request.hookKind].name;
+  const client = buildClient(ctx, config, policyName);
+  // Bound to the primary provider, as `evaluateGuard` resolves it: a policy in
+  // `enforce` on a provider that isn't calibrated for it yet is held at
+  // `shadow`, so the 429 fallback below must not fail closed on the raw mode.
+  const policyConfig = policyConfigFor(config, policyName, providerBinding(client.primary));
   const limiter = guardRateLimiterFor(input.companyId, config);
   if (!limiter.tryConsume(input.companyId, estimateRequestTokens(request.excerpt))) {
     // Reuse the same fail-closed logic a provider timeout/error would hit, so a
@@ -527,7 +533,6 @@ async function handleGuardEvaluate(ctx: PluginContext, input: PluginApiRequestIn
     return { status: 429, body: { error: "rate limit exceeded", decision, reason: "rate-limited" } };
   }
 
-  const client = buildClient(ctx, config, POLICY_FOR_HOOK[request.hookKind].name);
   const issue = request.issueId ? await ctx.issues.get(request.issueId, input.companyId) : null;
 
   // `input.actor.runId` is the host-authenticated run id; `request.runId` is

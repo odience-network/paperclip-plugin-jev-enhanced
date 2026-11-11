@@ -77,6 +77,8 @@ export function statusForToolError(code: string): number {
     case "timeout":
     case "aborted":
       return 504;
+    case "refused":
+      return 422;
     case "validation-failed":
     case "connection-error":
       return 502;
