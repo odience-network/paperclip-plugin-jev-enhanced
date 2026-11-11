@@ -69,6 +69,16 @@ export interface IssueTriageOptions {
   issueTypeLabelIds?: Record<string, string>;
 }
 
+function wordsOf(text: string): Set<string> {
+  return new Set(text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []);
+}
+
+function overlapCount(a: Set<string>, b: Set<string>): number {
+  let count = 0;
+  for (const word of b) if (a.has(word)) count++;
+  return count;
+}
+
 export const issueTriagePolicy: Policy<IssueTriageState> = {
   name: "issue-triage",
   version: "1.0.0",
@@ -168,6 +178,29 @@ export const issueTriagePolicy: Policy<IssueTriageState> = {
     }
 
     return questions;
+  },
+
+  /** For a provider with fewer choice slots than candidates (Clef: 26, core:
+   * 20), keep the candidates whose name/role or title shares the most words
+   * with this issue; the sentinels always stay. Ties keep the state's order
+   * (agent list order, newest issues first). */
+  rankChoices(state) {
+    const issueWords = wordsOf(`${state.title} ${state.description ?? ""}`);
+    const rank = <T>(items: T[], id: (item: T) => string, text: (item: T) => string) =>
+      items
+        .map((item, index) => ({ id: id(item), index, overlap: overlapCount(issueWords, wordsOf(text(item))) }))
+        .sort((a, b) => b.overlap - a.overlap || a.index - b.index)
+        .map((entry) => entry.id);
+    return {
+      owner: {
+        ranked: rank(state.eligibleAgents, (agent) => agent.id, (agent) => `${agent.name} ${agent.role}`),
+        pinned: ["unassigned", "needs_triage"],
+      },
+      duplicateOf: {
+        ranked: rank(state.recentOpenIssues, (issue) => issue.id, (issue) => issue.title),
+        pinned: ["none"],
+      },
+    };
   },
 
   decide(answers, ctx, state): PolicyVerdict {

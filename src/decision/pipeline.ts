@@ -24,11 +24,53 @@ export interface DecisionPipelineOptions {
   now?: () => Date;
 }
 
+/** How a choice question's options may be trimmed for a provider whose
+ * `maxChoiceOptions` is below the option count: `pinned` options (sentinels
+ * such as "none") always stay, then `ranked` options in order fill the rest. */
+export interface ChoiceRanking {
+  ranked: readonly string[];
+  pinned: readonly string[];
+}
+
 export interface VerdictAskInput {
   policy: string;
   companyId: string;
   state: unknown;
   questions: DecisionQuestions;
+  /** Choice questions that may be capped by ranking, keyed by question name. */
+  choiceRanking?: Record<string, ChoiceRanking>;
+}
+
+/**
+ * Caps each ranked choice question to `maxOptions`: pinned options, then the
+ * best-ranked rest. Kept options stay in the question's own order, so a capped
+ * question is a subset of the original, not a reshuffle. Unranked questions
+ * and questions already within the cap are returned as is.
+ */
+export function capRankedChoices(
+  questions: DecisionQuestions,
+  ranking: Record<string, ChoiceRanking> | undefined,
+  maxOptions: number,
+): DecisionQuestions {
+  if (!ranking) return questions;
+  let capped: DecisionQuestions | null = null;
+  for (const [name, { ranked, pinned }] of Object.entries(ranking)) {
+    const question = questions[name];
+    if (question?.type !== "choice") continue;
+    const options = Object.keys(question.criteria);
+    if (options.length <= maxOptions) continue;
+    const keep = new Set(pinned.filter((option) => options.includes(option)));
+    for (const option of [...ranked, ...options]) {
+      if (keep.size >= maxOptions) break;
+      if (options.includes(option)) keep.add(option);
+    }
+    capped ??= { ...questions };
+    capped[name] = {
+      ...question,
+      criteria: Object.fromEntries(Object.entries(question.criteria).filter(([option]) => keep.has(option))),
+    };
+  }
+  return capped ?? questions;
 }
 
 export interface VerdictAskOutcome {
@@ -146,14 +188,15 @@ export class DecisionPipeline {
     let fallbackFrom: VerdictAskOutcome["fallbackFrom"] = null;
     for (const provider of this.providers) {
       if (failures.length > 0 && Date.now() >= deadline) break;
-      const capabilityReason = checkCapabilities(provider, input.questions, requestBytes);
+      const questions = capRankedChoices(input.questions, input.choiceRanking, provider.capabilities.maxChoiceOptions);
+      const capabilityReason = checkCapabilities(provider, questions, requestBytes);
       if (capabilityReason) {
         failures.push(new CapabilityError(capabilityReason, provider.id));
         fallbackFrom ??= capabilityReason;
         continue;
       }
       try {
-        const outcome = await this.askProvider(provider, input, { truncated, stateHash, questionsHash, started, deadline });
+        const outcome = await this.askProvider(provider, { ...input, questions }, { truncated, stateHash, questionsHash, started, deadline });
         return { ...outcome, requestedProvider: this.primary, fallbackFrom };
       } catch (error) {
         failures.push(error);

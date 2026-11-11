@@ -108,6 +108,7 @@ export async function runPolicy<TState>(
       companyId: input.companyId,
       state: input.state,
       questions,
+      choiceRanking: input.policy.rankChoices?.(input.state, ctx),
     });
     const answeredBy = askOutcome.provider;
     const answeredConfig =
