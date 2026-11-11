@@ -2,6 +2,7 @@ import {
   definePlugin,
   runWorker,
   type PluginContext,
+  type PluginEvent,
   type PluginHealthDiagnostics,
   type PluginConfigValidationResult,
   type PluginApiRequestInput,
@@ -21,6 +22,7 @@ import {
   getLatestDecision,
   getLatestDecisionForPolicy,
   listDecisionHistory,
+  listRecentDecisionsForPolicy,
   getPolicyAggregate,
   type DecisionRow,
   type LedgerDb,
@@ -29,8 +31,13 @@ import {
   policies,
   runPolicy,
   issueTriagePolicy,
+  commentTriagePolicy,
+  runOutcomeQaPolicy,
   ISSUE_TYPE_CATALOG,
   type IssueTriageState,
+  type CommentTriageState,
+  type RunOutcomeQaState,
+  type RunOutcomeQaRunStatus,
   type RunPolicyResult,
   type Policy,
 } from "./policies/index.js";
@@ -84,6 +91,15 @@ function buildApplyDeps(ctx: PluginContext): ApplyDeps {
     log: (message, fields) => ctx.logger.info(message, fields),
     updateIssue: async ({ issueId, companyId, patch }) => {
       await ctx.issues.update(issueId, patch, companyId);
+    },
+    requestWakeup: async ({ issueId, companyId, reason }) => {
+      await ctx.issues.requestWakeup(issueId, companyId, { reason });
+    },
+    createComment: async ({ issueId, companyId, body }) => {
+      // No `authorAgentId`/`actorUserId` — resolves to `authorType: "system"`,
+      // which is exactly what keeps this from waking anyone or re-triggering
+      // `comment-triage` on the plugin's own comment (see its `preFilter`).
+      await ctx.issues.createComment(issueId, body, companyId);
     },
   };
 }
@@ -220,6 +236,144 @@ async function triageIssue(
   );
 
   return result;
+}
+
+/**
+ * Builds the state `comment-triage` asks Jev about. Returns `null` when the
+ * issue or the specific comment can't be found (e.g. deleted between the
+ * event firing and the handler running) — the event payload's `bodySnippet`
+ * is truncated to 120 chars, so the comment is always re-fetched in full here
+ * rather than trusted from the event.
+ */
+async function buildCommentTriageState(
+  ctx: PluginContext,
+  companyId: string,
+  issueId: string,
+  commentId: string,
+): Promise<CommentTriageState | null> {
+  const issue = await ctx.issues.get(issueId, companyId);
+  if (!issue) return null;
+
+  const comments = await ctx.issues.listComments(issueId, companyId);
+  const comment = comments.find((c) => c.id === commentId);
+  if (!comment) return null;
+
+  return {
+    issueId,
+    commentId,
+    commentBody: comment.body,
+    authorType: comment.authorType,
+    issueTitle: issue.title,
+    issueDescription: issue.description,
+    hasAssignee: Boolean(issue.assigneeAgentId || issue.assigneeUserId),
+    isPluginOrigin: issue.originKind === PLUGIN_ORIGIN_KIND,
+  };
+}
+
+/** Shared entry point for `comment-triage`'s only trigger (`issue.comment.created`). */
+async function triageComment(
+  ctx: PluginContext,
+  companyId: string,
+  issueId: string,
+  commentId: string,
+): Promise<RunPolicyResult | null> {
+  const config = await loadConfig(ctx, companyId);
+  const policyConfig = policyConfigFor(config, commentTriagePolicy.name);
+  if (!policyConfig.enabled) return null;
+
+  const state = await buildCommentTriageState(ctx, companyId, issueId, commentId);
+  if (!state) return null;
+
+  const client = buildClient(ctx, config);
+  return runPolicy(
+    { policy: commentTriagePolicy, state, config, companyId, issueId },
+    { client, db: ctx.db, apply: buildApplyDeps(ctx), suggest: buildSuggestDeps(ctx) },
+  );
+}
+
+/**
+ * Builds the state `run-outcome-qa` asks Jev about. The run lifecycle event
+ * payload carries no comment/description text (just run metadata), so the
+ * issue and its comments are always re-fetched here. The "final comment" is
+ * the run's own last comment, matched by `createdByRunId` — never inferred
+ * from timing or agent id — so a concurrent comment from someone else on the
+ * same issue can never be mistaken for this run's own claim.
+ */
+async function buildRunOutcomeQaState(
+  ctx: PluginContext,
+  companyId: string,
+  issueId: string,
+  runId: string,
+  runStatus: RunOutcomeQaRunStatus,
+): Promise<RunOutcomeQaState | null> {
+  const issue = await ctx.issues.get(issueId, companyId);
+  if (!issue) return null;
+
+  const comments = await ctx.issues.listComments(issueId, companyId);
+  const runComments = comments
+    .filter((comment) => comment.createdByRunId === runId)
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  const finalComment = runComments.length > 0 ? runComments[runComments.length - 1] : null;
+
+  return {
+    issueId,
+    runId,
+    runStatus,
+    finalCommentBody: finalComment?.body ?? null,
+    issueTitle: issue.title,
+    issueDescription: issue.description,
+    isPluginOrigin: issue.originKind === PLUGIN_ORIGIN_KIND,
+  };
+}
+
+/** Shared entry point for `run-outcome-qa`'s triggers (`agent.run.finished`/`agent.run.failed`). */
+async function triageRunOutcome(
+  ctx: PluginContext,
+  companyId: string,
+  issueId: string,
+  runId: string,
+  runStatus: RunOutcomeQaRunStatus,
+): Promise<RunPolicyResult | null> {
+  const config = await loadConfig(ctx, companyId);
+  const policyConfig = policyConfigFor(config, runOutcomeQaPolicy.name);
+  if (!policyConfig.enabled) return null;
+
+  const state = await buildRunOutcomeQaState(ctx, companyId, issueId, runId, runStatus);
+  if (!state) return null;
+
+  const client = buildClient(ctx, config);
+  return runPolicy(
+    { policy: runOutcomeQaPolicy, state, config, companyId, issueId, runId },
+    { client, db: ctx.db, apply: buildApplyDeps(ctx), suggest: buildSuggestDeps(ctx) },
+  );
+}
+
+/** Shared handler for both `agent.run.finished` and `agent.run.failed` —
+ * the payload shape is identical for both (`publishRunLifecyclePluginEventData`
+ * picks the event type from `status`, not the other way around). */
+async function handleRunLifecycleEvent(ctx: PluginContext, event: PluginEvent): Promise<void> {
+  const payload = event.payload as Record<string, unknown>;
+  const issueId = typeof payload.issueId === "string" ? payload.issueId : null;
+  const runId = typeof payload.runId === "string" ? payload.runId : (event.entityId ?? null);
+  const status = payload.status;
+  const runStatus: RunOutcomeQaRunStatus | null =
+    status === "succeeded" || status === "failed" || status === "timed_out" ? status : null;
+  if (!issueId || !runId || !runStatus) return;
+
+  const acquired = await acquireLease(ctx.state, `run-outcome-qa:${event.eventId}`);
+  if (!acquired) {
+    ctx.logger.debug("jev.run-outcome-qa.event.duplicate", { eventId: event.eventId });
+    return;
+  }
+  try {
+    await triageRunOutcome(ctx, event.companyId, issueId, runId, runStatus);
+  } catch (error) {
+    ctx.logger.error("jev.run-outcome-qa.run-failed", {
+      issueId,
+      runId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /** Lifecycle hooks other than `setup` receive no `ctx` argument, so `setup`
@@ -467,6 +621,43 @@ const plugin = definePlugin({
       }
     });
 
+    ctx.events.on("issue.comment.created", async (event) => {
+      // The entity here is the issue (comment-creation activity logs
+      // `entityType: "issue"`), not the comment — the comment id only ever
+      // appears inside the payload.
+      const issueId = event.entityId;
+      const payload = event.payload as Record<string, unknown>;
+      const commentId = typeof payload.commentId === "string" ? payload.commentId : "";
+      if (!issueId || !commentId) return;
+      const acquired = await acquireLease(ctx.state, `comment-triage:${event.eventId}`);
+      if (!acquired) {
+        ctx.logger.debug("jev.comment-triage.event.duplicate", { eventId: event.eventId });
+        return;
+      }
+      try {
+        const result = await triageComment(ctx, event.companyId, issueId, commentId);
+        if (result && result.outcome !== "skipped") {
+          // Structured fields only — never the comment body or issue text.
+          await ctx.events.emit("comment.classified", event.companyId, {
+            issueId,
+            commentId,
+            verdict: result.verdict.verdict,
+            confidence: result.verdict.confidence,
+            margin: result.verdict.margin,
+          });
+        }
+      } catch (error) {
+        ctx.logger.error("jev.comment-triage.run-failed", {
+          issueId,
+          commentId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+
+    ctx.events.on("agent.run.finished", (event) => handleRunLifecycleEvent(ctx, event));
+    ctx.events.on("agent.run.failed", (event) => handleRunLifecycleEvent(ctx, event));
+
     ctx.actions.register("triage-issue", async (params, context: PluginPerformActionContext) => {
       const issueId = typeof params.issueId === "string" ? params.issueId : "";
       const companyId = context.companyId;
@@ -537,6 +728,12 @@ const plugin = definePlugin({
       // straight through and break the SQL `LIMIT`.
       const limit = Number.isInteger(params.limit) ? (params.limit as number) : undefined;
       return listDecisionHistory(ctx.db, companyId, issueId, limit);
+    });
+
+    ctx.data.register("comment-triage-feed", async (params) => {
+      const companyId = requireCompanyId(params);
+      const limit = Number.isInteger(params.limit) ? (params.limit as number) : undefined;
+      return listRecentDecisionsForPolicy(ctx.db, companyId, commentTriagePolicy.name, limit);
     });
 
     ctx.jobs.register("daily-budget-report", async (job) => {

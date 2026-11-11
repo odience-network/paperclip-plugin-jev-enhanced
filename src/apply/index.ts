@@ -20,6 +20,14 @@ export interface ApplyDeps {
    * rule has no override, enforced by the caller (`applyIssueTriage`), not
    * by this signature. */
   updateIssue?: (input: { issueId: string; companyId: string; patch: Record<string, unknown> }) => Promise<void>;
+  /** Wakes the issue's current assignee. Never chooses or changes who the
+   * assignee is — that stays `assigneeUserId`/`assigneeAgentId`'s business. */
+  requestWakeup?: (input: { issueId: string; companyId: string; reason: string }) => Promise<void>;
+  /** Posts a plugin-authored comment. Only ever used for structured,
+   * synthesized text describing a policy's own fields/flags — never raw
+   * issue or comment content, which stays on the data side of the
+   * redaction/truncation pipeline, not echoed back into the thread. */
+  createComment?: (input: { issueId: string; companyId: string; body: string }) => Promise<void>;
 }
 
 export type ApplyFn = (input: ApplyInput, deps: ApplyDeps) => Promise<void>;
@@ -101,6 +109,62 @@ async function applyGuard(input: ApplyInput, deps: ApplyDeps): Promise<void> {
   deps.log("jev.apply.guard", { policy: input.policy, verdict: input.verdict.verdict, runId: input.ctx.runId ?? null });
 }
 
+/** Wakes the assignee when `decide()` marked `wakeupAssignee` as `"apply"` —
+ * the only possible side effect `comment-triage` has, and only ever a wakeup,
+ * never a reassignment or status change. */
+async function applyCommentTriage(input: ApplyInput, deps: ApplyDeps): Promise<void> {
+  const issueId = input.ctx.issueId;
+  const wakeupField = (input.verdict.fields ?? []).find((f) => f.field === "wakeupAssignee");
+  if (!issueId || !deps.requestWakeup || !wakeupField || wakeupField.action !== "apply") {
+    deps.log("jev.apply.comment-triage.no-op", {
+      reason: !issueId
+        ? "no-issue-id"
+        : !deps.requestWakeup
+          ? "no-request-wakeup-dep"
+          : !wakeupField || wakeupField.action !== "apply"
+            ? "nothing-to-apply"
+            : "unknown",
+    });
+    return;
+  }
+  await deps.requestWakeup({
+    issueId,
+    companyId: input.ctx.companyId,
+    reason: `jev.comment-triage.${input.verdict.verdict}`,
+  });
+  deps.log("jev.apply.comment-triage", { issueId, verdict: input.verdict.verdict });
+}
+
+/** Posts a reviewer-facing comment when `decide()` flagged the run's
+ * completion claim or outcome as needing review — never changes the issue's
+ * status, priority, or assignee. The comment body only ever references
+ * structured flags, never the agent's raw final-comment text. */
+async function applyRunOutcomeQa(input: ApplyInput, deps: ApplyDeps): Promise<void> {
+  const issueId = input.ctx.issueId;
+  const commentField = (input.verdict.fields ?? []).find((f) => f.field === "reviewerComment");
+  if (!issueId || !deps.createComment || !commentField || commentField.action !== "apply") {
+    deps.log("jev.apply.run-outcome-qa.no-op", {
+      reason: !issueId
+        ? "no-issue-id"
+        : !deps.createComment
+          ? "no-create-comment-dep"
+          : !commentField || commentField.action !== "apply"
+            ? "nothing-to-apply"
+            : "unknown",
+    });
+    return;
+  }
+  const lines = [
+    "Jev flagged this run's outcome for review.",
+    `- verdict: \`${input.verdict.verdict}\``,
+    ...(input.verdict.fields ?? [])
+      .filter((f) => f.field !== "reviewerComment")
+      .map((f) => `- ${f.field}: \`${JSON.stringify(f.value)}\``),
+  ];
+  await deps.createComment({ issueId, companyId: input.ctx.companyId, body: lines.join("\n") });
+  deps.log("jev.apply.run-outcome-qa", { issueId, verdict: input.verdict.verdict });
+}
+
 export const applyHandlers: Record<string, ApplyFn> = {
   ping: applyPing,
   "issue-triage": applyIssueTriage,
@@ -111,6 +175,8 @@ export const applyHandlers: Record<string, ApplyFn> = {
   "guard-pre": applyGuard,
   "guard-post": applyGuard,
   "guard-stop": applyGuard,
+  "comment-triage": applyCommentTriage,
+  "run-outcome-qa": applyRunOutcomeQa,
 };
 
 export async function applyDecision(input: ApplyInput, deps: ApplyDeps): Promise<void> {

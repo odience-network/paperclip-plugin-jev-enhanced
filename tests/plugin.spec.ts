@@ -1,12 +1,55 @@
 import { describe, expect, it } from "vitest";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
+import type { Issue, IssueComment } from "@paperclipai/shared";
 import manifest from "../src/manifest.js";
 import plugin from "../src/worker.js";
+
+function fakeIssue(overrides: Partial<Issue> = {}): Issue {
+  return {
+    id: "issue_1",
+    companyId: "company_1",
+    title: "Test issue",
+    description: null,
+    status: "todo",
+    priority: "medium",
+    assigneeAgentId: null,
+    assigneeUserId: null,
+    projectId: null,
+    originKind: undefined,
+    labels: [],
+    labelIds: [],
+    ...overrides,
+  } as unknown as Issue;
+}
+
+function fakeComment(overrides: Partial<IssueComment> = {}): IssueComment {
+  return {
+    id: "comment_1",
+    companyId: "company_1",
+    issueId: "issue_1",
+    authorType: "user",
+    authorAgentId: null,
+    authorUserId: "user_1",
+    body: "Can someone confirm the rollout window for this?",
+    presentation: null,
+    metadata: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  } as unknown as IssueComment;
+}
 
 describe("plugin scaffold", () => {
   it("declares capabilities for its manifest features", () => {
     expect(manifest.capabilities).toContain("events.subscribe");
     expect(manifest.capabilities).toContain("ui.dashboardWidget.register");
+  });
+
+  it("declares capabilities needed for comment-triage and run-outcome-qa side effects", () => {
+    expect(manifest.capabilities).toContain("events.emit");
+    expect(manifest.capabilities).toContain("issues.wakeup");
+    expect(manifest.capabilities).toContain("issue.comments.read");
+    expect(manifest.capabilities).toContain("issue.comments.create");
   });
 
   it("registers data + actions", async () => {
@@ -30,6 +73,74 @@ describe("plugin scaffold", () => {
     await expect(
       harness.emit("issue.created", {}, { entityId: "iss_1", entityType: "issue" }),
     ).resolves.not.toThrow();
+  });
+
+  it("handles issue.comment.created without making a network call when no API key is bound", async () => {
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities, "events.emit"] });
+    harness.seed({
+      issues: [fakeIssue()],
+      issueComments: [fakeComment()],
+    });
+    await plugin.definition.setup(harness.ctx);
+
+    await expect(
+      harness.emit(
+        "issue.comment.created",
+        { commentId: "comment_1" },
+        { entityId: "issue_1", entityType: "issue", companyId: "company_1" },
+      ),
+    ).resolves.not.toThrow();
+  });
+
+  it("handles agent.run.finished without making a network call when no API key is bound", async () => {
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities, "events.emit"] });
+    harness.seed({
+      issues: [fakeIssue()],
+      issueComments: [fakeComment({ id: "comment_2", createdByRunId: "run_1", body: "Done." })],
+    });
+    await plugin.definition.setup(harness.ctx);
+
+    await expect(
+      harness.emit(
+        "agent.run.finished",
+        { runId: "run_1", agentId: "agent_1", status: "succeeded", issueId: "issue_1" },
+        { entityId: "run_1", entityType: "heartbeat_run", companyId: "company_1" },
+      ),
+    ).resolves.not.toThrow();
+  });
+
+  it("handles agent.run.failed without making a network call when no API key is bound", async () => {
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities, "events.emit"] });
+    harness.seed({
+      issues: [fakeIssue()],
+      issueComments: [],
+    });
+    await plugin.definition.setup(harness.ctx);
+
+    await expect(
+      harness.emit(
+        "agent.run.failed",
+        { runId: "run_1", agentId: "agent_1", status: "failed", issueId: "issue_1" },
+        { entityId: "run_1", entityType: "heartbeat_run", companyId: "company_1" },
+      ),
+    ).resolves.not.toThrow();
+  });
+
+  it("comment-triage-feed scopes by company and the comment-triage policy name, defaulting the limit to 20", async () => {
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities, "events.emit"] });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.getData("comment-triage-feed", { companyId: "company_1" });
+
+    const query = harness.dbQueries.find((q) => q.sql.includes("policy = $2"));
+    expect(query?.params).toEqual(["company_1", "comment-triage", 20]);
+  });
+
+  it("comment-triage-feed rejects calls with no companyId", async () => {
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities, "events.emit"] });
+    await plugin.definition.setup(harness.ctx);
+
+    await expect(harness.getData("comment-triage-feed", {})).rejects.toThrow(/companyId is required/);
   });
 
   it("degrades gracefully (not an error, not a false ok) when no API key is bound", async () => {
