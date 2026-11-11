@@ -151,6 +151,8 @@ const providerConfigSchema = z.discriminatedUnion("kind", [
       baseUrl: z.string().url().optional(),
       path: z.string().startsWith("/").optional(),
       authStyle: z.enum(["bearer", "x-api-key", "none"]).optional(),
+      /** Accepts a `model` outside the preset's published catalog. */
+      allowUnlistedModel: z.boolean().optional(),
     })
     .strict(),
   z.object({ kind: z.literal("core"), model: z.string().min(1).optional() }).strict(),

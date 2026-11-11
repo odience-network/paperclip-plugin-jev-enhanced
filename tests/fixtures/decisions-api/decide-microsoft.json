@@ -1,0 +1,58 @@
+{
+  "source": "docs",
+  "docsUrl": "https://decisions-api.dev/docs",
+  "notes": "Docs-derived, not a recorded response. Envelope and result shape from the illustrative response on https://decisions-api.dev/docs; model id, question types and price from the model card on https://decisions-api.dev/models (read 2026-11-12). Answer values are illustrative. creditsUsed is max(1, ceil(input_tokens x 600 / 1M)) for this model.",
+  "path": "/v1/systemone",
+  "request": {
+    "model": "microsoft/microsoft-decision-1",
+    "state": "Issue: Add a CSV download button to the reports page. Acceptance: the button exports the current filter.",
+    "questions": {
+      "kind": {
+        "type": "choice",
+        "instructions": "What kind of work is this?",
+        "criteria": {
+          "feature": "New behaviour",
+          "bug": "Broken behaviour",
+          "chore": "Maintenance"
+        }
+      },
+      "well_specified": {
+        "type": "noul",
+        "instructions": "Does the issue state acceptance criteria?"
+      }
+    }
+  },
+  "response": {
+    "code": 0,
+    "message": "ok",
+    "data": {
+      "requestId": "req_example_microsoft",
+      "creditsUsed": 3,
+      "historySaved": true,
+      "result": {
+        "model": "microsoft/microsoft-decision-1",
+        "answers": {
+          "kind": {
+            "type": "choice",
+            "choice": "feature",
+            "probabilities": {
+              "feature": 0.91,
+              "bug": 0.03,
+              "chore": 0.06
+            },
+            "confidence": 0.88
+          },
+          "well_specified": {
+            "type": "noul",
+            "noul": 0.9
+          }
+        },
+        "usage": {
+          "input_tokens": 5000,
+          "output_tokens": 0
+        },
+        "elapsedMs": 250
+      }
+    }
+  }
+}

@@ -48,13 +48,14 @@ export interface FeedbackSummary {
 }
 
 /** `verification: "fixtures"` marks a Tier B provider: built from published
- * docs and never called live, shown as "not live-verified". */
+ * docs and never called live, shown as "not live-verified". `caveat` is a
+ * one-line note on the configured model (e.g. a poor benchmark ranking). */
 export type ProviderHealth = (
   | { status: "ok"; modelCount: number }
   | { status: "unbound" }
   | { status: "unchecked" }
   | { status: "unreachable"; message: string }
-) & { verification?: "live" | "fixtures" };
+) & { verification?: "live" | "fixtures"; caveat?: string };
 
 export interface PolicyAggregate {
   policy: string;

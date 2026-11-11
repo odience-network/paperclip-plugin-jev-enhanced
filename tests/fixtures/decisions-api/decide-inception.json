@@ -1,0 +1,39 @@
+{
+  "source": "docs",
+  "docsUrl": "https://decisions-api.dev/docs",
+  "notes": "Docs-derived, not a recorded response. Envelope and result shape from the illustrative response on https://decisions-api.dev/docs; model id, question types and price from the model card on https://decisions-api.dev/models (read 2026-11-12). Answer values are illustrative. creditsUsed is max(1, ceil(input_tokens x 300 / 1M)) for this model.",
+  "path": "/v1/systemone",
+  "request": {
+    "model": "inception/mercury-decide",
+    "state": "Comment: Thanks, the fix in the last release resolved it for us. Closing from our side.",
+    "questions": {
+      "resolved": {
+        "type": "noul",
+        "instructions": "Does the commenter say the problem is resolved?"
+      }
+    }
+  },
+  "response": {
+    "code": 0,
+    "message": "ok",
+    "data": {
+      "requestId": "req_example_inception",
+      "creditsUsed": 1,
+      "historySaved": true,
+      "result": {
+        "model": "inception/mercury-decide",
+        "answers": {
+          "resolved": {
+            "type": "noul",
+            "noul": 0.95
+          }
+        },
+        "usage": {
+          "input_tokens": 900,
+          "output_tokens": 0
+        },
+        "elapsedMs": 250
+      }
+    }
+  }
+}

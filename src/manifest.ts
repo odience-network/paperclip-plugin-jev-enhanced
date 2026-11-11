@@ -94,11 +94,14 @@ const manifest: PaperclipPluginManifestV1 = {
         title: "Providers",
         description:
           "Decision providers by alias. Each entry is { kind: \"systemone\", preset, apiKeyRef, model?, baseUrl?, " +
-          "path?, authStyle? } or { kind: \"core\" }. Preset \"typesafe\" sends redacted state text to TypeSafe " +
+          "path?, authStyle?, allowUnlistedModel? } or { kind: \"core\" }. Preset \"typesafe\" sends redacted state text to TypeSafe " +
           "(api.typesafe.ai; zero data retention on enterprise plans). Presets \"perplexity\", \"openrouter\", " +
           "\"decisions-api\" and \"kev\" (Opper, EU) send it to that hosted provider; \"ollama\", \"laya\" and \"von\" " +
           "send it to your own server at baseUrl. Those seven are built from published docs and are not " +
-          "live-verified: policies on them stay in shadow until thresholds are calibrated for them. \"core\" uses " +
+          "live-verified: policies on them stay in shadow until thresholds are calibrated for them. \"decisions-api\" " +
+          "(34+ models, 8 questions max) needs a model id from its published catalog unless allowUnlistedModel is true. " +
+          "Cloudflare clef and clef-flash rank 14th and 19th of 19 on Vals ClaimBench (2026-10-23): not a recommended " +
+          "default. \"core\" uses " +
           "the host's own decision service where the host exposes one, holds no credential, and is billed by the host.",
         additionalProperties: {
           type: "object",
@@ -114,6 +117,7 @@ const manifest: PaperclipPluginManifestV1 = {
             baseUrl: { type: "string" },
             path: { type: "string" },
             authStyle: { type: "string", enum: ["bearer", "x-api-key", "none"] },
+            allowUnlistedModel: { type: "boolean" },
           },
           required: ["kind"],
         },

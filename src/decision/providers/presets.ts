@@ -1,6 +1,7 @@
 import { VerdictValidationError } from "../errors.js";
 import { DEFAULT_TYPESAFE_MODEL } from "../models.js";
 import type { CostEstimate, ProviderCapabilities } from "../provider.js";
+import type { DecisionUsage } from "../types.js";
 
 /** How the API key is sent. `"none"` is for self-hosted servers with no auth. */
 export type SystemOneAuthStyle = "bearer" | "x-api-key" | "none";
@@ -45,6 +46,14 @@ export interface SystemOnePreset {
   /** Maps a documented response variant onto the bare SystemOne body. Runs
    * before validation, so anything it does not map is still rejected. */
   normalizeResponse?: (raw: unknown, requestedModel: string) => NormalizedResponse;
+  /** The model ids the provider publishes, for aggregators where the model id
+   * picks the upstream vendor. `model` must be one of these (or an alias)
+   * unless the operator sets `allowUnlistedModel`, so a typo cannot route
+   * state text to a different vendor. */
+  modelCatalog?: { url: string; readOn: string; ids: readonly string[] };
+  /** Cost for pricing a rate card cannot express (rounding, per-request
+   * minimums). Used when the response reports no cost of its own. */
+  estimateCost?: (model: string, usage: DecisionUsage) => CostEstimate;
 }
 
 /** SystemOne reference caps (TypeSafe Jev). Tier B presets whose docs publish
@@ -100,15 +109,17 @@ function normalizeOpenRouter(raw: unknown, requestedModel: string): NormalizedRe
 }
 
 /** decisions-api.dev wraps the SystemOne response in `{code, message, data:
- * {result, creditsUsed}}`; `code !== 0` is an error even on HTTP 200. Credits
- * are $1 per 10,000. The provider's `message` is not carried into the error:
- * it may echo request content. */
+ * {requestId, creditsUsed, historySaved, result}}`; `code !== 0` is an error
+ * even on HTTP 200. `result.elapsedMs` is dropped. Credits are $1 per 10,000.
+ * The provider's `message` is not carried into the error: it may echo
+ * request content. */
 function normalizeDecisionsApi(raw: unknown): NormalizedResponse {
   if (!isRecord(raw) || !("code" in raw)) return { body: raw };
   if (raw.code !== 0) throw new VerdictValidationError(`decisions-api.dev returned error code ${String(raw.code)}`);
   const data = isRecord(raw.data) ? raw.data : {};
+  const { elapsedMs: _elapsedMs, ...result } = isRecord(data.result) ? data.result : {};
   return {
-    body: data.result,
+    body: isRecord(data.result) ? result : data.result,
     reportedCost: typeof data.creditsUsed === "number" ? { usd: data.creditsUsed / 10_000, rateVersion: "decisions-api-credits" } : undefined,
   };
 }
@@ -128,6 +139,84 @@ function normalizeVon(raw: unknown): NormalizedResponse {
       ),
     },
   };
+}
+
+/** decisions-api.dev pricing per model, read 2026-11-12 from
+ * https://decisions-api.dev/models and /docs: credits per 1M input tokens
+ * (output is free), or a flat charge per successful request. Where the
+ * pricing table and the model card disagree (Drex v2.0, Drex Max,
+ * Classify-1) the higher figure is used, so estimates err high. */
+type DecisionsApiPrice = { creditsPerMInput: number } | { creditsPerRequest: number };
+
+const DECISIONS_API_PRICES: Record<string, DecisionsApiPrice> = {
+  "typesafe/jev-1.13": { creditsPerMInput: 600 },
+  "typesafe/jev-1.14": { creditsPerMInput: 600 },
+  "liquid/d1": { creditsPerMInput: 600 },
+  "liquid/d1.1": { creditsPerMInput: 300 },
+  "liquid/d1-ultra": { creditsPerMInput: 600 },
+  "inception/mercury-decide": { creditsPerMInput: 300 },
+  "inception/mercury-decide:free": { creditsPerRequest: 1 },
+  "microsoft/microsoft-decision-1": { creditsPerMInput: 600 },
+  "nace-ai/drex-v1.5": { creditsPerMInput: 600 },
+  "nace-ai/drex-v2.0": { creditsPerMInput: 900 },
+  "nace-ai/drex-max": { creditsPerMInput: 900 },
+  "upstage/solar-decide": { creditsPerMInput: 720 },
+  "upstage/solar-decide-flash": { creditsPerMInput: 720 },
+  "baseten/mammoth-1": { creditsPerMInput: 1_500 },
+  "baseten/elephant-1": { creditsPerMInput: 500 },
+  "baseten/joey-1": { creditsPerMInput: 200 },
+  "morph/reflex": { creditsPerMInput: 600 },
+  "respan/span-02": { creditsPerMInput: 200 },
+  "respan/span-01": { creditsPerMInput: 300 },
+  "respan/span-01-lite": { creditsPerRequest: 1 },
+  "respan/span-01-lite:free": { creditsPerRequest: 1 },
+  "scaledown/classify-1": { creditsPerMInput: 720 },
+  "togethercomputer/tev1-4b-experimental": { creditsPerMInput: 600 },
+  "jaredpalmer/kev-4b": { creditsPerMInput: 600 },
+  "convaiinnovations/laya": { creditsPerRequest: 1 },
+  // Not priced on the page; assumed to be Laya's flat charge.
+  "convaiinnovations/laya-free": { creditsPerRequest: 1 },
+  "perplexity/pplx-decider-v1.2": { creditsPerMInput: 300 },
+  "perplexity/pplx-decider-flash-v1.2": { creditsPerMInput: 200 },
+  // Ranked 14th (clef) and 19th (clef-flash) of 19 on Vals ClaimBench
+  // (2026-10-23): listed, not recommended. See `modelCaveat`.
+  "cloudflare/clef": { creditsPerMInput: 3_500 },
+  "cloudflare/clef-flash": { creditsPerMInput: 600 },
+  "cloudflare/clef-omni": { creditsPerMInput: 2_200 },
+  "openai/gpt-6-luna-decisions": { creditsPerMInput: 1_500 },
+};
+
+/** decisions-api.dev's rolling `~` aliases, pinned to what they pointed at
+ * on 2026-11-12 so the model echo and thresholds stay on one version. The
+ * Perplexity aliases are assumed to follow v1.2, the only enabled Decider. */
+const DECISIONS_API_ALIASES: Record<string, string> = {
+  "~typesafe/jev-latest": "typesafe/jev-1.14",
+  "~liquid/d1-latest": "liquid/d1.1",
+  "~liquid/d1-ultra-latest": "liquid/d1-ultra",
+  "~perplexity/pplx-decider-latest": "perplexity/pplx-decider-v1.2",
+  "~perplexity/pplx-decider-flash-latest": "perplexity/pplx-decider-flash-v1.2",
+};
+
+/** decisions-api.dev: `max(1, ceil(input_tokens x rate / 1M))` credits, or the
+ * flat per-request charge; $1 per 10,000 credits. An unlisted model (allowed
+ * only with `allowUnlistedModel`) is costed at the highest listed rate. */
+function estimateDecisionsApiCost(model: string, usage: DecisionUsage): CostEstimate {
+  const price = DECISIONS_API_PRICES[model] ?? { creditsPerMInput: 3_500 };
+  const credits =
+    "creditsPerRequest" in price ? price.creditsPerRequest : Math.max(1, Math.ceil((usage.input_tokens * price.creditsPerMInput) / 1_000_000));
+  return { usd: credits / 10_000, rateVersion: "decisions-api-credits-2026-11-12" };
+}
+
+/** Benchmark caveat shown next to a provider whose model ranks at the bottom
+ * of public decision benchmarks: Cloudflare Clef is live-verified and kept
+ * because the board holds a token, not because it is a good default. Matches
+ * the bare Ollama tag, the decisions-api.dev id and Workers AI's `@cf/` id. */
+export function modelCaveat(model: string): string | undefined {
+  const name = model.replace(/:latest$/, "").split("/").pop();
+  if (name === "clef" || name === "clef-flash") {
+    return "Clef: ranked 14th (clef) and 19th (clef-flash) of 19 on Vals ClaimBench (2026-10-23); not a recommended default.";
+  }
+  return undefined;
 }
 
 function escapeRegExp(value: string): string {
@@ -188,15 +277,22 @@ export const SYSTEMONE_PRESETS: Record<string, SystemOnePreset> = {
     modelsPath: null,
     authStyle: "bearer",
     defaultModel: "",
-    modelAliases: {},
-    // Confidence semantics are the routed model's, not the aggregator's.
-    capabilities: { ...REFERENCE_CAPABILITIES, maxQuestions: 8 },
+    modelAliases: DECISIONS_API_ALIASES,
+    // 1 to 8 questions and 32 KiB of text and questions per request, for every
+    // model. Confidence semantics are the routed model's, not the aggregator's.
+    capabilities: { ...REFERENCE_CAPABILITIES, maxQuestions: 8, maxRequestBytes: 32_768 },
     verification: "fixtures",
     disclosure:
       "Sends redacted state text to decisions-api.dev, which forwards it to the provider of the chosen model. No " +
       "API-side retention policy published.",
-    docsUrl: "https://decisions-api.dev/",
+    docsUrl: "https://decisions-api.dev/docs",
     normalizeResponse: normalizeDecisionsApi,
+    modelCatalog: {
+      url: "https://decisions-api.dev/models",
+      readOn: "2026-11-12",
+      ids: [...Object.keys(DECISIONS_API_PRICES), ...Object.keys(DECISIONS_API_ALIASES)],
+    },
+    estimateCost: estimateDecisionsApiCost,
   },
   ollama: {
     name: "ollama",

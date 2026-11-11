@@ -1,0 +1,58 @@
+{
+  "source": "docs",
+  "docsUrl": "https://decisions-api.dev/docs",
+  "notes": "Docs-derived, not a recorded response. Envelope and result shape from the illustrative response on https://decisions-api.dev/docs; model id, question types and price from the model card on https://decisions-api.dev/models (read 2026-11-12). Answer values are illustrative. creditsUsed is max(1, ceil(input_tokens x 300 / 1M)) for this model.",
+  "path": "/v1/systemone",
+  "request": {
+    "model": "liquid/d1.1",
+    "state": "Ticket: the nightly export job has failed three nights in a row and the finance team cannot close the month.",
+    "questions": {
+      "urgency": {
+        "type": "score",
+        "instructions": "How urgent is this ticket?",
+        "criteria": [
+          "low",
+          "medium",
+          "high",
+          "critical"
+        ]
+      }
+    }
+  },
+  "response": {
+    "code": 0,
+    "message": "ok",
+    "data": {
+      "requestId": "req_example_liquid",
+      "creditsUsed": 4,
+      "historySaved": true,
+      "result": {
+        "model": "liquid/d1.1",
+        "answers": {
+          "urgency": {
+            "type": "score",
+            "score": 2.71,
+            "legend": {
+              "0": "low",
+              "1": "medium",
+              "2": "high",
+              "3": "critical"
+            },
+            "probabilities": {
+              "0": 0.01,
+              "1": 0.04,
+              "2": 0.18,
+              "3": 0.77
+            },
+            "confidence": 0.81
+          }
+        },
+        "usage": {
+          "input_tokens": 12000,
+          "output_tokens": 0
+        },
+        "elapsedMs": 250
+      }
+    }
+  }
+}

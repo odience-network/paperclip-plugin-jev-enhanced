@@ -1,0 +1,48 @@
+{
+  "source": "docs",
+  "docsUrl": "https://decisions-api.dev/docs",
+  "notes": "Docs-derived, not a recorded response. Envelope and result shape from the illustrative response on https://decisions-api.dev/docs; model id, question types and price from the model card on https://decisions-api.dev/models (read 2026-11-12). Answer values are illustrative. creditsUsed is max(1, ceil(input_tokens x 500 / 1M)) for this model.",
+  "path": "/v1/systemone",
+  "request": {
+    "model": "baseten/elephant-1",
+    "state": "Issue: Upgrade the date library across the web app; several deprecation warnings in the build log.",
+    "questions": {
+      "tier": {
+        "type": "choice",
+        "instructions": "Which model tier does this work need?",
+        "criteria": {
+          "small": "Mechanical edits",
+          "large": "Design or cross-cutting judgement"
+        }
+      }
+    }
+  },
+  "response": {
+    "code": 0,
+    "message": "ok",
+    "data": {
+      "requestId": "req_example_baseten",
+      "creditsUsed": 3,
+      "historySaved": true,
+      "result": {
+        "model": "baseten/elephant-1",
+        "answers": {
+          "tier": {
+            "type": "choice",
+            "choice": "small",
+            "probabilities": {
+              "small": 0.84,
+              "large": 0.16
+            },
+            "confidence": 0.68
+          }
+        },
+        "usage": {
+          "input_tokens": 4100,
+          "output_tokens": 0
+        },
+        "elapsedMs": 250
+      }
+    }
+  }
+}

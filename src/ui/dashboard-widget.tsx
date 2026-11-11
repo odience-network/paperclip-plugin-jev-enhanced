@@ -45,6 +45,7 @@ export function DashboardWidget({ context }: PluginWidgetProps) {
         Provider health: {providerHealthLabel}
         {verificationLabel}
       </div>
+      {data.providerHealth.caveat ? <div>{data.providerHealth.caveat}</div> : null}
     </div>
   );
 }

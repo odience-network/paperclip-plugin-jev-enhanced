@@ -110,10 +110,40 @@ const SYSTEMONE_CASES: ContractCase[] = [
   // The synthetic reply carries no `usage.cost`, so nothing is charged; the
   // reported-cost path is covered by the docs fixture in provider-presets.spec.ts.
   tierBCase("openrouter", { expectedModel: "typesafe/jev-1.13", expectedPath: "/api/alpha/decisions" }),
+  // 1000 input tokens at 600 credits per 1M is 0.6, rounded up to 1 credit ($0.0001).
   tierBCase(
     "decisions-api",
-    { expectedModel: "typesafe/jev-1.13", expectedPath: "/v1/systemone" },
+    {
+      expectedModel: "typesafe/jev-1.13",
+      expectedPath: "/v1/systemone",
+      expectedCostUsd: 0.0001,
+      expectedRateVersion: "decisions-api-credits-2026-11-12",
+    },
     { model: "typesafe/jev-1.13" },
+  ),
+  // One model per vendor family added in G4b; at 1000 input tokens every rate
+  // up to 1,000 credits per 1M rounds to 1 credit, mammoth-1 (1,500) to 2.
+  ...(
+    [
+      ["liquid/d1.1", 0.0001],
+      ["inception/mercury-decide", 0.0001],
+      ["microsoft/microsoft-decision-1", 0.0001],
+      ["nace-ai/drex-max", 0.0001],
+      ["upstage/solar-decide", 0.0001],
+      ["baseten/mammoth-1", 0.0002],
+    ] as const
+  ).map(([model, expectedCostUsd]) =>
+    tierBCase(
+      "decisions-api",
+      {
+        name: `systemone/decisions-api preset, ${model}`,
+        expectedModel: model,
+        expectedPath: "/v1/systemone",
+        expectedCostUsd,
+        expectedRateVersion: "decisions-api-credits-2026-11-12",
+      },
+      { model },
+    ),
   ),
   tierBCase("ollama", {
     expectedModel: "clef",

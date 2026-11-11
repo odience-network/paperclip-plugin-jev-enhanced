@@ -27,6 +27,7 @@ import {
   type ProviderRuntime,
 } from "./decision/registry.js";
 import { CORE_UNAVAILABLE_REASON } from "./decision/providers/core.js";
+import { modelCaveat } from "./decision/providers/presets.js";
 import {
   acquireLease,
   getLatestDecision,
@@ -570,7 +571,7 @@ type ProviderHealth = (
   | { status: "unbound" }
   | { status: "unchecked" }
   | { status: "unreachable"; message: string }
-) & { verification?: "live" | "fixtures" };
+) & { verification?: "live" | "fixtures"; caveat?: string };
 
 const PROVIDER_HEALTH_CACHE_MS = 60_000;
 // Keyed by the config fields that actually determine reachability (not by
@@ -621,7 +622,8 @@ async function checkProviderHealth(ctx: PluginContext, config: VerdictConfig): P
       health = { status: "unreachable", message: error instanceof Error ? error.message : String(error) };
     }
   }
-  health = { ...health, verification: provider.verification };
+  const caveat = modelCaveat(provider.model);
+  health = { ...health, verification: provider.verification, ...(caveat ? { caveat } : {}) };
   providerHealthCache.set(key, { at: now, health });
   return health;
 }
