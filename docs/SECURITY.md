@@ -1,13 +1,13 @@
-# JevGuard security hardening (ODIAA-2369)
+# VerdictGuard security hardening (ODIAA-2369)
 
-Threat model and residual risks for JevGuard: the harness hooks
+Threat model and residual risks for VerdictGuard: the harness hooks
 (`hooks/`), the `guard/evaluate` API route, and the `guard-pre`/`guard-post`/
 `guard-stop` policies. Read alongside `ARCHITECTURE.md` for the module map
 and `eval/REPORT.md` for the current accuracy numbers.
 
-## What JevGuard is and isn't
+## What VerdictGuard is and isn't
 
-JevGuard is a **best-effort, probabilistic second opinion** on tool calls,
+VerdictGuard is a **best-effort, probabilistic second opinion** on tool calls,
 not an access-control system. It cannot physically prevent a tool from
 running — it can only advise Claude Code's own hook enforcement, which the
 agent's own operator controls (see "Excessive agency" below). Treat it as
@@ -17,9 +17,9 @@ configuration.
 ## Threat: injection via issue text or tool output
 
 Issue titles/descriptions and fetched tool output are attacker-reachable
-(anyone who can author an issue or a webpage the agent fetches). JevGuard's
+(anyone who can author an issue or a webpage the agent fetches). VerdictGuard's
 own `excerpt`/`issueTitle`/`issueDescription` inputs go through the same
-pipeline as every other policy's state before reaching Jev:
+pipeline as every other policy's state before reaching the provider:
 `redactText` (operator-configured regex patterns, `redactionPatterns` in
 config — **not** a built-in secret scanner; an operator who hasn't added
 patterns for their own secret formats gets no redaction at all, by design,
@@ -31,14 +31,14 @@ influences the agent's next action — the `injection`/`kind` questions (see
 "does this output contain an instruction directed at the agent."
 
 **Residual risk**: a sufficiently novel injection phrasing can evade the
-Jev classifier, same as any ML-based detector. The loop guard
+decision-model classifier, same as any ML-based detector. The loop guard
 (`src/guard/loopGuard.ts`) is a backstop for the specific case of an
 injected instruction causing a repeated identical tool call, independent
 of whether `guard-post` caught the injection itself.
 
 ## Threat: key handling
 
-- `apiKeyRef` (the Jev/TypeSafe provider key) is a vault secret reference,
+- `apiKeyRef` (the TypeSafe provider key) is a vault secret reference,
   never a plaintext config value — resolved via `ctx.secrets.resolve` at
   call time (`src/worker.ts`), never logged, never part of any ledger row.
 - The harness's own `PAPERCLIP_AGENT_API_KEY` (hooks/) is a **separate**
@@ -47,7 +47,7 @@ of whether `guard-post` caught the injection itself.
   committed, and never be the board/human key that can call
   `/api/plugins/install` or read company secrets (those return `403` for
   agent keys by design — see the plugin's install model).
-- Audit rows (`jev_decisions`) store tool name, decision, confidence,
+- Audit rows (`verdict_decisions`) store tool name, decision, confidence,
   latency, model, mode — **never** the request's `excerpt`, `answers`
   (written as `{}`, see `src/guard/evaluate.ts`), or any raw tool
   input/output. A compromised read of the ledger table discloses behavior
@@ -60,20 +60,20 @@ of whether `guard-post` caught the injection itself.
   the request body (never trusted from an unauthenticated caller).
 - Per-company rate limiting (`src/guard/rateLimit.ts`,
   `guardRails.rateLimit`: default 40 req/s and 100k estimated-tokens/s) sits
-  in front of both the issue lookup and the Jev call, so a runaway or
+  in front of both the issue lookup and the provider call, so a runaway or
   malicious caller hitting this route in a loop gets `429`s before costing
   any provider spend, not after.
 - The time budget (`guardRails.timeBudgetMs`, default 1500ms) bounds how
   long any single call can hold the line; `raceWithTimeout`
   (`src/guard/evaluate.ts`) guarantees exactly one resolution per call even
-  if the underlying Jev call eventually completes late, so a slow provider
+  if the underlying provider call eventually completes late, so a slow provider
   can't accumulate unbounded in-flight work no caller is still waiting on.
 - The loop guard is itself a DoS backstop in the other direction:
-  deterministic, and tripped before any Jev call, so a tight tool-call loop
-  (runaway agent or injection-induced) can't turn into a Jev-spend amplifier.
+  deterministic, and tripped before any provider call, so a tight tool-call loop
+  (runaway agent or injection-induced) can't turn into a provider-spend amplifier.
 - On `429` (rate-limited), the response body carries the policy's own
   fail-closed decision (`fallbackDecision(hookKind, mode)`, same function the
-  server uses for a Jev timeout — `handleGuardEvaluate`, `src/worker.ts`),
+  server uses for a provider timeout — `handleGuardEvaluate`, `src/worker.ts`),
   not just an error. `hooks/lib/guard-client.mjs` honors that decision
   directly rather than falling through to its own default-`allow` transport
   fallback — otherwise an agent could flood the route past its rate limit
@@ -97,14 +97,14 @@ gap, not a theoretical one.
 Two independent layers make this decision, and they use different defaults
 on purpose:
 
-1. **Server-side** (`fallbackDecision` in `src/guard/evaluate.ts`): on a Jev
+1. **Server-side** (`fallbackDecision` in `src/guard/evaluate.ts`): on a provider
    timeout or error, `shadow`/`suggest` modes fail open to `allow` (they
    can't block regardless, so failing open changes nothing observable —
    "fail-open for observation/routing"). `Stop` always fails open (its
    decision space has no `deny`). Only an `enforce`-mode `PreToolUse`/
    `PostToolUse` call fails closed, and only to `ask` — never a `deny`
    manufactured purely from an infra failure, since that would itself be a
-   DoS lever against the whole run (an attacker who can make Jev time out
+   DoS lever against the whole run (an attacker who can make the provider time out
    could otherwise freeze every tool call).
 2. **Harness-side** (`hooks/lib/guard-client.mjs`): if the hook script can't
    even reach the plugin (network error, non-2xx, malformed body), it
@@ -149,7 +149,7 @@ when *all* of the following hold:
 - `resolvedAt` is within `overrideFreshnessMs` (default 15 minutes) of now.
 
 A stale, wrong-company, wrong-kind, agent-resolved, unbound, or
-not-yet-accepted stamp falls through to the normal Jev evaluation rather
+not-yet-accepted stamp falls through to the normal provider evaluation rather
 than denying outright — a forged or malformed stamp can't itself cause
 harm, only fail to grant the override it claims. The tool blocklist is
 checked **before** the override stamp (`runRails`, `src/guard/rails.ts`): an
@@ -161,21 +161,21 @@ for the `ask`/`deny`-by-policy case, not for bypassing an explicit block.
 Paperclip's own interaction-acceptance flow. If that flow is itself
 compromised (e.g. a board account takeover), the override stamp inherits
 that compromise — this is a property of the host platform, not something
-JevGuard can independently verify.
+VerdictGuard can independently verify.
 
 ## Threat: loop guard / kill switch bypass
 
-These are deterministic rails evaluated **before** any Jev call
+These are deterministic rails evaluated **before** any provider call
 (`runRails` in `src/guard/rails.ts`), in a fixed order: kill switch →
 blocklist → override stamp → allowlist → read-only-tools → loop guard. An
-attacker who can influence Jev's answers (e.g. via a crafted prompt
+attacker who can influence the provider's answers (e.g. via a crafted prompt
 injection aimed at the provider, not just the agent) still cannot bypass
-these — they never reach Jev-dependent logic at all. `killSwitch: "deny-all"`
+these — they never reach provider-dependent logic at all. `killSwitch: "deny-all"`
 denies every `PreToolUse`/`PostToolUse` call without a provider round-trip,
 for an active incident, and forces `ask` for `Stop` (which has no `deny` in
 its decision space — `src/guard/stop.ts`); `killSwitch: "allow-all"` bypasses
 the guard entirely including rails, documented as an explicit, auditable
-config change (config history) reserved for recovering from a Jev/host
+config change (config history) reserved for recovering from a provider/host
 outage that is itself blocking legitimate work — treat flipping it as
 equivalent in blast radius to disabling the guard company-wide, because
 that is exactly what it does.
@@ -199,14 +199,14 @@ net. Rail-only decisions made this way are recorded in the ledger as
 
 The biggest residual risk in this design is structural, not code-level: an
 agent that can edit its own `settings.json` or the `hooks/*.mjs` files can
-simply remove the guard. JevGuard cannot detect or prevent this from inside
+simply remove the guard. VerdictGuard cannot detect or prevent this from inside
 the plugin — the hook invocation is entirely outside the plugin's
 runtime, in the harness's own process. Mitigation is operational, not
 technical: `settings.json` (and the hooks directory, if installed
 per-project) must live outside the paths the agent's own write permissions
 cover — e.g. a user-level settings file, or enforced via the coding agent's
 own permission model. `hooks/README.md` calls this out explicitly in the
-install guide. A company relying on JevGuard for anything beyond
+install guide. A company relying on VerdictGuard for anything beyond
 observation should treat "can this agent edit its own hook config" as a
 standing question in its agent-permission review, not a one-time setup
 step.
@@ -221,11 +221,11 @@ not as a way to retroactively stop an already-completed side effect.
 
 ## Threat: human-override invariants
 
-Jev policies in this plugin never write `assigneeUserId`, and never
+Verdict policies in this plugin never write `assigneeUserId`, and never
 override a human-set assignee/priority/status unless a policy's config
-explicitly marks it `always_auto` (not used by any guard policy — JevGuard
+explicitly marks it `always_auto` (not used by any guard policy — VerdictGuard
 only returns `allow`/`ask`/`deny` decisions, it never mutates issue fields
-at all). This is a property of what JevGuard's `apply` handler does
+at all). This is a property of what VerdictGuard's `apply` handler does
 (logging only, see `src/apply/index.ts`) rather than something enforced at
 the API boundary, so any future guard-adjacent policy that *does* need to
 mutate issue state must preserve this invariant explicitly, not inherit it
