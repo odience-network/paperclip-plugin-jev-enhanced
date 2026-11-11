@@ -221,7 +221,10 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
 
   it("maps a malformed body and a model-echo mismatch to validation-failed", async () => {
     const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.baseUrl)] });
-    const ask = () => pipeline.ask({ policy: "contract", companyId: "c1", state: "s", questions: { q: { type: "boolean" } } });
+    // SDK 0.7.0 refuses a question with neither instructions nor criteria
+    // before sending, so the question carries instructions.
+    const ask = () =>
+      pipeline.ask({ policy: "contract", companyId: "c1", state: "s", questions: { q: { type: "boolean", instructions: "q?" } } });
 
     server.respondWith(() => ({ body: { model: contract.expectedModel, answers: { q: { type: "noul", noul: 7 } }, usage: { input_tokens: 1, output_tokens: 1 } } }));
     expect(classifyError(await ask().catch((e) => e))).toBe("validation-failed");

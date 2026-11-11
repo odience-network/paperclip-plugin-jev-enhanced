@@ -1,4 +1,5 @@
-import { noul, choice, score, type Questions } from "@typesafe-ai/sdk";
+import { noul, choice, score } from "@typesafe-ai/sdk";
+import type { DecisionQuestions } from "../decision/types.js";
 import type { FieldDecision, Policy, PolicyContext, PolicyVerdict } from "./types.js";
 import { confidenceMarginFor } from "./util.js";
 
@@ -125,14 +126,14 @@ export const issueTriagePolicy: Policy<IssueTriageState> = {
     return true;
   },
 
-  questions(state): Questions {
+  questions(state): DecisionQuestions {
     // Question text is static and never interpolates issue title/description
     // or another issue's title: that text only reaches the provider through
     // `state`, which goes through the redaction/truncation pipeline before
     // being sent — question strings don't, so putting raw issue text in them
     // would both break the "no secrets in prompts" rule and let injected
     // text sit in instruction position instead of data position.
-    const questions: Questions = {
+    const questions: DecisionQuestions = {
       owner: choice("Who should own this issue? Use the issue's title and description, given above as state, to decide.", {
         ...Object.fromEntries(state.eligibleAgents.map((agent) => [agent.id, `${agent.name} (${agent.role})`])),
         unassigned: "No eligible agent fits yet; leave unassigned",

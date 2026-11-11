@@ -106,6 +106,11 @@ export class SystemOneProvider implements DecisionProvider {
       timeout: this.timeoutMs,
       fetch: this.wrapFetch(apiKey),
       retry: this.options.retry,
+      // SDK 0.7.0 zstd-compresses bodies over 1 KiB by default. Production
+      // traffic goes through `ctx.http.fetch`, whose worker bridge
+      // serializes a non-string body with `String(body)`, so a compressed
+      // body would reach the provider as garbage.
+      compression: false,
       logLevel: "off",
     });
   }

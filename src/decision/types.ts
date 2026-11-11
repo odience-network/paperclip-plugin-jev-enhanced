@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { NoulQuestion, Question, Questions } from "@typesafe-ai/sdk";
+import type { ChoiceQuestion, NoulQuestion, Questions, ScoreQuestion } from "@typesafe-ai/sdk";
 
 export const structuredEntrySchema = z.union([z.string().min(1), z.record(z.string(), z.unknown()), z.array(z.unknown())]);
 const structured = structuredEntrySchema;
@@ -122,7 +122,10 @@ export type VerdictAskResult = z.infer<typeof verdictAskResultSchema>;
 
 /** Canonical name for a yes/no question; same shape as SystemOne's `noul`. */
 export type BooleanQuestion = Omit<NoulQuestion, "type"> & { type: "boolean" };
-export type DecisionQuestion = Question | BooleanQuestion;
+/** Built from the SDK's per-type question names rather than its `Question`
+ * union, which since 0.7.0 also carries `box` (image regions): no provider
+ * here supports it, so it must not type-check as a decision question. */
+export type DecisionQuestion = NoulQuestion | ChoiceQuestion | ScoreQuestion | BooleanQuestion;
 export type DecisionQuestionType = "boolean" | "choice" | "score";
 export type DecisionQuestions = Record<string, DecisionQuestion>;
 
