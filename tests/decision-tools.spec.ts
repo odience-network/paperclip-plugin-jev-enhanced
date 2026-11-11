@@ -109,7 +109,7 @@ function apiInput(routeKey: string, body: unknown, overrides: Partial<PluginApiR
   };
 }
 
-describe("jev decision tools (MCP)", () => {
+describe("verdict decision tools (MCP)", () => {
   for (const tool of TOOLS) {
     it(`${tool} succeeds and returns a typed result plus a ledger row`, async () => {
       const harness = harnessWithFetch(
@@ -194,7 +194,7 @@ const BAD_IDENTIFIER_PARAMS: Partial<Record<Tool, unknown>> = {
   },
 };
 
-describe("jev decision tools reject out-of-shape caller-supplied identifiers", () => {
+describe("verdict decision tools reject out-of-shape caller-supplied identifiers", () => {
   for (const [tool, params] of Object.entries(BAD_IDENTIFIER_PARAMS) as [Tool, unknown][]) {
     it(`${tool} (MCP) returns "invalid-params" for an identifier outside [A-Za-z0-9_.:-]{1,64}`, async () => {
       const harness = harnessWithFetch((async () => fixtureResponseFor(TOOL_ANSWERS[tool])) as Fetch);
@@ -217,7 +217,7 @@ describe("jev decision tools reject out-of-shape caller-supplied identifiers", (
   }
 });
 
-describe("jev decision tool API routes", () => {
+describe("verdict decision tool API routes", () => {
   for (const tool of TOOLS) {
     const routeKey = ROUTE_FOR[tool];
 
