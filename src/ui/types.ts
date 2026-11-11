@@ -52,6 +52,18 @@ export type ProviderHealth =
   | { status: "unbound" }
   | { status: "unreachable"; message: string };
 
+/** One configured provider, as the health widget lists it. */
+export interface ProviderStatus {
+  id: string;
+  kind: "systemone" | "cloudflare" | "openai" | "core";
+  model: string;
+  /** `"live"`: verified against the real API. `"fixtures"`: not live-verified. */
+  verification: "live" | "fixtures";
+  isDefault: boolean;
+  disclosure: string;
+  health: ProviderHealth;
+}
+
 export interface PolicyAggregate {
   policy: string;
   companyId: string;
@@ -66,7 +78,9 @@ export interface DashboardSummary {
   dailyStats: DailyDecisionStat[];
   modeSplit: Record<PolicyMode, number>;
   feedbackSummary: FeedbackSummary;
+  /** The default provider's health. */
   providerHealth: ProviderHealth;
+  providers: ProviderStatus[];
   policyAggregates: PolicyAggregate[];
 }
 

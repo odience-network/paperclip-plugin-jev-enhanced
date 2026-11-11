@@ -19,15 +19,20 @@ import type { DecisionQuestions } from "./decision/types.js";
 import { createInMemoryVerdictCache } from "./decision/cache.js";
 import { createPluginStateBudgetStore, BudgetExceededError } from "./decision/budget.js";
 import {
+  allowlistedFetch,
   buildPolicyPipeline,
   buildProvider,
   defaultProviderId,
+  egressAllowlist,
   effectiveProviders,
+  providerDisclosure,
+  providerNeedsKey,
   providerBinding,
   validateProviderConfig,
   type ProviderRuntime,
 } from "./decision/registry.js";
 import { CORE_UNAVAILABLE_REASON } from "./decision/providers/core.js";
+import type { ProviderKind } from "./decision/provider.js";
 import {
   acquireLease,
   getLatestDecision,
@@ -407,7 +412,7 @@ function providerRuntime(ctx: PluginContext, config: VerdictConfig): ProviderRun
     resolveSecret: (ref) => ctx.secrets.resolve(ref as string | EnvSecretRefBinding),
     host: ctx,
     timeoutMs: config.timeoutMs,
-    fetchImpl: (url, init) => ctx.http.fetch(url, init),
+    fetchImpl: allowlistedFetch(egressAllowlist(config), (url, init) => ctx.http.fetch(url, init)),
   };
 }
 
@@ -575,6 +580,18 @@ type ProviderHealth =
   | { status: "unbound" }
   | { status: "unreachable"; message: string };
 
+/** One row of the health widget's provider list. */
+interface ProviderStatus {
+  id: string;
+  kind: ProviderKind;
+  model: string;
+  /** `"live"` (Tier A, verified against the real API) or `"fixtures"`. */
+  verification: "live" | "fixtures";
+  isDefault: boolean;
+  disclosure: string;
+  health: ProviderHealth;
+}
+
 const PROVIDER_HEALTH_CACHE_MS = 60_000;
 // Keyed by the config fields that actually determine reachability (not by
 // companyId directly), so two companies sharing the same key/baseUrl/model
@@ -582,26 +599,24 @@ const PROVIDER_HEALTH_CACHE_MS = 60_000;
 // per-company config never bleeds into another company's cached result.
 const providerHealthCache = new Map<string, { at: number; health: ProviderHealth }>();
 
-function providerHealthCacheKey(config: VerdictConfig): string {
-  const id = defaultProviderId(config);
-  return JSON.stringify([id, effectiveProviders(config).providers[id]]);
-}
-
-/** Shared by `onHealth` (host health check) and the `dashboard-summary` data
- * handler (UI provider-health metric) so the two never drift. Checks the
- * default provider only. Cached for ~60s: `dashboard-summary` is read on
- * every widget render, and a live `listModels()` call on each one is wasted
- * load against the provider. */
-async function checkProviderHealth(ctx: PluginContext, config: VerdictConfig): Promise<ProviderHealth> {
-  const id = defaultProviderId(config);
+/** Shared by `onHealth` (host health check, default provider) and the
+ * `dashboard-summary` data handler (every configured provider) so the two
+ * never drift. Cached for ~60s: `dashboard-summary` is read on every widget
+ * render, and a live `listModels()` call on each one is wasted load against
+ * the provider. */
+async function checkProviderHealth(
+  ctx: PluginContext,
+  config: VerdictConfig,
+  id: string = defaultProviderId(config),
+): Promise<ProviderHealth> {
   const providerConfig = effectiveProviders(config).providers[id];
   if (!providerConfig) {
     return { status: "unreachable", message: `defaultProvider "${id}" is not configured` };
   }
-  if (providerConfig.kind === "systemone" && !providerConfig.apiKeyRef && providerConfig.authStyle !== "none") {
+  if (providerNeedsKey(providerConfig)) {
     return { status: "unbound" };
   }
-  const key = providerHealthCacheKey(config);
+  const key = JSON.stringify([id, providerConfig]);
   const now = Date.now();
   const cached = providerHealthCache.get(key);
   if (cached && now - cached.at < PROVIDER_HEALTH_CACHE_MS) {
@@ -624,6 +639,25 @@ async function checkProviderHealth(ctx: PluginContext, config: VerdictConfig): P
   }
   providerHealthCache.set(key, { at: now, health });
   return health;
+}
+
+async function checkProvidersStatus(ctx: PluginContext, config: VerdictConfig): Promise<ProviderStatus[]> {
+  const defaultId = defaultProviderId(config);
+  const runtime = providerRuntime(ctx, config);
+  return Promise.all(
+    Object.entries(effectiveProviders(config).providers).map(async ([id, providerConfig]) => {
+      const provider = buildProvider(id, providerConfig, runtime);
+      return {
+        id,
+        kind: provider.kind,
+        model: provider.model,
+        verification: provider.verification,
+        isDefault: id === defaultId,
+        disclosure: providerDisclosure(providerConfig),
+        health: await checkProviderHealth(ctx, config, id),
+      };
+    }),
+  );
 }
 
 const plugin = definePlugin({
@@ -843,15 +877,16 @@ const plugin = definePlugin({
       const since = new Date();
       since.setUTCDate(since.getUTCDate() - 30);
 
-      const [dailyStats, modeSplit, feedbackSummary, providerHealth, policyAggregates] = await Promise.all([
+      const [dailyStats, modeSplit, feedbackSummary, providers, policyAggregates] = await Promise.all([
         getDailyDecisionStats(ctx.db, companyId, since.toISOString()),
         getModeSplit(ctx.db, companyId),
         getFeedbackSummary(ctx.db, companyId),
-        checkProviderHealth(ctx, config),
+        checkProvidersStatus(ctx, config),
         Promise.all(Object.keys(policies).map((policy) => getPolicyAggregate(ctx.db, companyId, policy))),
       ]);
 
-      return { dailyStats, modeSplit, feedbackSummary, providerHealth, policyAggregates };
+      const providerHealth = providers.find((provider) => provider.isDefault)?.health ?? (await checkProviderHealth(ctx, config));
+    return { dailyStats, modeSplit, feedbackSummary, providerHealth, providers, policyAggregates };
     });
 
     ctx.data.register("calibration-summary", async () => {

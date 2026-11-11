@@ -113,6 +113,15 @@ export class ProviderConnectionError extends Error {
   }
 }
 
+/** A provider request to an origin outside the egress allowlist (the
+ * configured providers' hosts). Raised before anything is sent. */
+export class EgressBlockedError extends Error {
+  constructor(public readonly origin: string) {
+    super(`Egress to ${origin} is not allowed: it is not the host of any configured provider`);
+    this.name = "EgressBlockedError";
+  }
+}
+
 /**
  * Maps a thrown error to a short, fixed machine code — never the error's own
  * message — so `verdict_decisions.reason` never carries free text (which could
@@ -126,6 +135,10 @@ export function classifyError(error: unknown): string {
   if (error instanceof CapabilityError) return error.reason;
   if (error instanceof ProviderUnavailableError) return "provider-unavailable";
   if (error instanceof DecisionRefusalError) return "refused";
+  // The TypeSafe SDK wraps whatever its fetch throws in `APIConnectionError`.
+  if (error instanceof EgressBlockedError || (error instanceof Error && error.cause instanceof EgressBlockedError)) {
+    return "egress-blocked";
+  }
   if (error instanceof ProviderHttpError) return httpStatusCode(error.status);
   if (error instanceof ProviderTimeoutError) return "timeout";
   if (error instanceof ProviderConnectionError) return "connection-error";
@@ -189,6 +202,7 @@ export function errorClassOf(error: unknown): ErrorClass {
     case "budget-exceeded":
       return "budget_exceeded";
     case "missing-api-key":
+    case "egress-blocked":
     case "auth-failed":
     case "permission-denied":
       return "auth_config";

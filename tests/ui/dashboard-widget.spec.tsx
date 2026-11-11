@@ -51,6 +51,37 @@ describe("DashboardWidget", () => {
     }
   });
 
+  it("lists every configured provider with its health, verification flag and disclosure", async () => {
+    const { uninstall } = await installUiTestBridge({
+      companyId: "company_1",
+      config: {
+        providers: {
+          typesafe: { kind: "systemone", preset: "typesafe" },
+          "cf-clef": { kind: "cloudflare", accountId: "0123456789abcdef0123456789abcdef", model: "clef-flash" },
+          luna: { kind: "openai" },
+          host: { kind: "core" },
+        },
+        defaultProvider: "luna",
+      },
+    });
+    try {
+      renderWidget("company_1");
+      const list = await waitFor(() => screen.getByRole("list", { name: "Providers" }));
+      const rows = Array.from(list.querySelectorAll("li")).map((row) => row.textContent);
+      expect(rows).toEqual([
+        "typesafe: systemone/jev-1.13.0 — no API key bound · live-verified",
+        "cf-clef: cloudflare/clef-flash — no API key bound · live-verified",
+        "luna (default): openai/gpt-6-luna — no API key bound · live-verified",
+        "host: core/host-default — unreachable: core: unavailable on this host · not live-verified",
+      ]);
+      expect(list.querySelectorAll("li")[1].getAttribute("title")).toMatch(/Cloudflare does not store or train on requests/);
+      expect(list.querySelectorAll("li")[2].getAttribute("title")).toMatch(/ZDR eligible, EU residency available/);
+      expect(screen.getByText(/Provider health: no API key bound/)).toBeTruthy();
+    } finally {
+      uninstall();
+    }
+  });
+
   it("shows an error state when the data handler rejects", async () => {
     const { harness, uninstall } = await installUiTestBridge({ companyId: "company_1" });
     try {

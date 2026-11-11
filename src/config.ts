@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CLOUDFLARE_MODELS } from "./decision/providers/cloudflare.js";
 
 export const POLICY_MODES = ["shadow", "suggest", "enforce"] as const;
 export type PolicyMode = (typeof POLICY_MODES)[number];
@@ -139,8 +140,12 @@ export type GuardRailsConfig = z.infer<typeof guardRailsConfigSchema>;
 
 const providerIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/, "provider ids are lowercase letters, digits and dashes");
 
-/** `cloudflare` and `openai` adapters land in G3; until then the schema only
- * admits the kinds this build can construct. */
+/** Cloudflare account ids are 32 hex characters. Configuration, not a secret,
+ * but never committed: it identifies the board's account. */
+const cloudflareAccountIdSchema = z.string().regex(/^[0-9a-f]{32}$/i, "accountId is the 32-character Cloudflare account id");
+
+/** One entry of `providers`, validated per `kind`. Every kind but `core`
+ * takes its credential as a vault `apiKeyRef`, never a literal. */
 const providerConfigSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -151,6 +156,23 @@ const providerConfigSchema = z.discriminatedUnion("kind", [
       baseUrl: z.string().url().optional(),
       path: z.string().startsWith("/").optional(),
       authStyle: z.enum(["bearer", "x-api-key", "none"]).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("cloudflare"),
+      accountId: cloudflareAccountIdSchema,
+      apiKeyRef: secretRefSchema.optional(),
+      model: z.enum(CLOUDFLARE_MODELS).optional(),
+      baseUrl: z.string().url().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("openai"),
+      apiKeyRef: secretRefSchema.optional(),
+      model: z.string().min(1).optional(),
+      baseUrl: z.string().url().optional(),
     })
     .strict(),
   z.object({ kind: z.literal("core"), model: z.string().min(1).optional() }).strict(),
