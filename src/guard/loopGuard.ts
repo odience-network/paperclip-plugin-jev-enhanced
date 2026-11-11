@@ -1,7 +1,7 @@
 import type { LoopGuardConfig } from "../config.js";
 
 /** Minimal shape of `ctx.state` the loop guard depends on, mirroring
- * `PluginStateLike` in `src/jev/budget.ts` so this module stays independently
+ * `PluginStateLike` in `src/decision/budget.ts` so this module stays independently
  * unit-testable with a plain fake. */
 export interface LoopGuardState {
   get(input: { scopeKind: "run"; scopeId: string; namespace: string; stateKey: string }): Promise<unknown>;

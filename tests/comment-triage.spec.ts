@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Fetch } from "@typesafe-ai/sdk";
-import { JevClient } from "../src/jev/client.js";
+import { createTypesafePipeline } from "../src/decision/registry.js";
+import type { DecisionPipeline } from "../src/decision/pipeline.js";
 import { commentTriagePolicy, type CommentTriageState } from "../src/policies/comment-triage.js";
 import { runPolicy } from "../src/policies/run.js";
 import type { PolicyContext } from "../src/policies/types.js";
-import type { JevAnswer } from "../src/jev/types.js";
+import type { JevAnswer } from "../src/decision/types.js";
 import { jevConfigSchema, type JevConfig } from "../src/config.js";
 import type { LedgerDb } from "../src/ledger/db.js";
 
@@ -242,11 +243,11 @@ describe("commentTriagePolicy via runPolicy", () => {
     });
   }
 
-  function fakeClient(answers: Record<string, unknown>): JevClient {
+  function fakeClient(answers: Record<string, unknown>): DecisionPipeline {
     const fetchImpl = vi.fn<Fetch>(async () =>
       jsonResponse({ model: "jev-1.13.0", answers, usage: { input_tokens: 10, output_tokens: 5 } }),
     );
-    return new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    return createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
   }
 
   function blockerAnswers(): Record<string, unknown> {
@@ -339,7 +340,7 @@ describe("commentTriagePolicy via runPolicy", () => {
     // redelivered event for the same comment would produce) hashes the same
     // way `runPolicy` itself computes it — mirroring the redelivery guard
     // `acquireLease` provides at the worker layer, one level up.
-    const { hashState } = await import("../src/jev/redact.js");
+    const { hashState } = await import("../src/decision/redact.js");
     const priorStateHash = hashState(state, config.redactionPatterns);
     const second = await runPolicy(
       { policy: commentTriagePolicy, state, config, companyId: "company_1", issueId: "issue_1", priorStateHash },

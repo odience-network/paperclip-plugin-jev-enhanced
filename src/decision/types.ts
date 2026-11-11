@@ -1,8 +1,14 @@
 import { z } from "zod";
+import type { NoulQuestion, Question, Questions } from "@typesafe-ai/sdk";
 
 export const structuredEntrySchema = z.union([z.string().min(1), z.record(z.string(), z.unknown()), z.array(z.unknown())]);
 const structured = structuredEntrySchema;
 const criterion = z.union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())]);
+
+const booleanQuestionShape = {
+  instructions: structured,
+  criteria: z.object({ true: criterion.optional(), false: criterion.optional() }).strict().optional(),
+};
 
 /**
  * Adopted shape-for-shape from `typesafeAskSchema` in Paperclip core PR #13713
@@ -10,15 +16,16 @@ const criterion = z.union([z.string(), z.record(z.string(), z.unknown()), z.arra
  * stays swappable for a future core TypeSafe connection without a migration.
  * Exported so `src/tools/schemas.ts` can validate the generic `jev:ask`
  * tool's `questions` param against the exact same shape, without duplicating it.
+ *
+ * Canonical question types are `boolean` / `choice` / `score`. `noul` is the
+ * SystemOne wire name for `boolean` and is accepted as an alias; providers
+ * that speak SystemOne emit `noul` (see `toSystemOneQuestions`). Answers keep
+ * the SystemOne shape (`{type:"noul", noul}`) for a boolean question, since
+ * every policy, fixture and eval dataset consumes that shape.
  */
 export const jevQuestionSchema = z.discriminatedUnion("type", [
-  z
-    .object({
-      type: z.literal("noul"),
-      instructions: structured,
-      criteria: z.object({ true: criterion.optional(), false: criterion.optional() }).strict().optional(),
-    })
-    .strict(),
+  z.object({ type: z.literal("boolean"), ...booleanQuestionShape }).strict(),
+  z.object({ type: z.literal("noul"), ...booleanQuestionShape }).strict(),
   z
     .object({
       type: z.literal("choice"),
@@ -112,3 +119,27 @@ export const jevAskResultSchema = z
   })
   .strict();
 export type JevAskResult = z.infer<typeof jevAskResultSchema>;
+
+/** Canonical name for a yes/no question; same shape as SystemOne's `noul`. */
+export type BooleanQuestion = Omit<NoulQuestion, "type"> & { type: "boolean" };
+export type DecisionQuestion = Question | BooleanQuestion;
+export type DecisionQuestionType = "boolean" | "choice" | "score";
+export type DecisionQuestions = Record<string, DecisionQuestion>;
+
+export function canonicalQuestionType(question: DecisionQuestion): DecisionQuestionType {
+  return question.type === "noul" ? "boolean" : question.type;
+}
+
+/** Rewrites canonical `boolean` questions to SystemOne's `noul` wire name.
+ * Everything else is already SystemOne-shaped. */
+export function toSystemOneQuestions(questions: DecisionQuestions): Questions {
+  const wire: Questions = {};
+  for (const [name, question] of Object.entries(questions)) {
+    wire[name] = question.type === "boolean" ? { ...question, type: "noul" } : question;
+  }
+  return wire;
+}
+
+export type DecisionAnswer = JevAnswer;
+export type DecisionResult = JevAskResult;
+export type DecisionUsage = JevAskResult["usage"];

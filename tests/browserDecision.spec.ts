@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Fetch } from "@typesafe-ai/sdk";
-import { JevClient } from "../src/jev/client.js";
+import { createTypesafePipeline } from "../src/decision/registry.js";
 import { decideBrowserAction, MAX_BROWSER_ELEMENTS } from "../src/tools/browserDecision.js";
 import { jevConfigSchema, type JevConfig } from "../src/config.js";
 import type { LedgerDb } from "../src/ledger/db.js";
@@ -70,7 +70,7 @@ function clickAnswers(overrides: Record<string, unknown> = {}) {
 describe("decideBrowserAction input validation", () => {
   it("rejects unknown fields on an element (e.g. a selector) without calling the provider", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
 
     const result = await decideBrowserAction(
       { goal: GOAL, url: ALLOWED_URL, elements: [{ index: 0, role: "button", selector: "#submit" }] },
@@ -83,7 +83,7 @@ describe("decideBrowserAction input validation", () => {
 
   it("rejects duplicate element indices", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
 
     const result = await decideBrowserAction(
       { goal: GOAL, url: ALLOWED_URL, elements: [{ index: 0, role: "button" }, { index: 0, role: "link" }] },
@@ -96,7 +96,7 @@ describe("decideBrowserAction input validation", () => {
 
   it(`rejects more than ${MAX_BROWSER_ELEMENTS} elements`, async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
     const elements = Array.from({ length: MAX_BROWSER_ELEMENTS + 1 }, (_, index) => ({ index, role: "button" }));
 
     const result = await decideBrowserAction(
@@ -110,7 +110,7 @@ describe("decideBrowserAction input validation", () => {
 
   it("skips disabled policies without calling the provider", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
 
     const result = await decideBrowserAction(
       { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
@@ -133,7 +133,7 @@ describe("decideBrowserAction input validation", () => {
 describe("decideBrowserAction origin allowlist", () => {
   it("blocks an origin outside the allowlist before any provider call", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
 
     const result = await decideBrowserAction(
       { goal: GOAL, url: "https://evil.example.com/contact", elements: ELEMENTS },
@@ -146,7 +146,7 @@ describe("decideBrowserAction origin allowlist", () => {
 
   it("blocks every origin when none are configured (fails closed by default)", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
 
     const result = await decideBrowserAction(
       { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
@@ -168,7 +168,7 @@ function suggestConfig(overrides: Partial<JevConfig> = {}) {
 describe("decideBrowserAction shadow mode", () => {
   it("is non-actionable by default: action is 'blocked' even when the policy would have acted", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
 
     const result = await decideBrowserAction(
       { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
@@ -191,7 +191,7 @@ describe("decideBrowserAction shadow mode", () => {
     const fetchImpl = vi.fn<Fetch>(async () =>
       jsonResponse(clickAnswers({ sensitivity: { type: "noul", noul: 0.9 } })),
     );
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
     const requestConfirmation = vi.fn(async () => ({ interactionId: "interaction_1" }));
 
     const result = await decideBrowserAction(
@@ -213,7 +213,7 @@ describe("decideBrowserAction shadow mode", () => {
     const fetchImpl = vi.fn<Fetch>(async () =>
       jsonResponse(clickAnswers({ target_0: { type: "noul", noul: 0.1 }, target_1: { type: "noul", noul: 0.1 } })),
     );
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
 
     const result = await decideBrowserAction(
       { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
@@ -227,7 +227,7 @@ describe("decideBrowserAction shadow mode", () => {
 describe("decideBrowserAction suggest/enforce mode", () => {
   it("returns the decided action and resolved target index for an allowlisted, non-sensitive request", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
 
     const result = await decideBrowserAction(
       { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
@@ -248,7 +248,7 @@ describe("decideBrowserAction suggest/enforce mode", () => {
 
   it("maps enforce mode to a 'suggested' outcome (never 'applied') since the tool is always advisory", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
 
     const result = await decideBrowserAction(
       { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
@@ -268,7 +268,7 @@ describe("decideBrowserAction suggest/enforce mode", () => {
 
   it("never emits a selector in its response, only an element index", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
 
     const result = await decideBrowserAction(
       { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
@@ -280,7 +280,7 @@ describe("decideBrowserAction suggest/enforce mode", () => {
 
   it("sends only origin + pathname to the provider, never the query string or fragment", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(clickAnswers()));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
 
     await decideBrowserAction(
       { goal: GOAL, url: `${ALLOWED_URL}?token=secret123#fragment-token`, elements: ELEMENTS },
@@ -295,7 +295,7 @@ describe("decideBrowserAction suggest/enforce mode", () => {
 
   it("records outcome 'error' and rethrows when the provider call fails", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse({ error: "boom" }, { status: 500 }));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl, retry: { maxRetries: 0 } });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl, retry: { maxRetries: 0 } });
 
     await expect(
       decideBrowserAction(
@@ -313,7 +313,7 @@ describe("decideBrowserAction confirm-mutation workflow", () => {
 
   it("opens a confirmation card with an idempotency key when none exists yet", async () => {
     const fetchImpl = sensitiveFetch();
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
     const findConfirmation = vi.fn(async () => null);
     const requestConfirmation = vi.fn(async () => ({ interactionId: "interaction_1" }));
 
@@ -354,7 +354,7 @@ describe("decideBrowserAction confirm-mutation workflow", () => {
 
   it("does not open a new card when a matching one is already pending", async () => {
     const fetchImpl = sensitiveFetch();
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
     const findConfirmation = vi.fn(async () => ({ id: "interaction_existing", status: "pending" as const }));
     const requestConfirmation = vi.fn(async () => ({ interactionId: "interaction_new" }));
 
@@ -381,7 +381,7 @@ describe("decideBrowserAction confirm-mutation workflow", () => {
 
   it("unblocks with the observed action once a human accepts the confirmation", async () => {
     const fetchImpl = sensitiveFetch();
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
     const findConfirmation = vi.fn(async () => ({ id: "interaction_existing", status: "accepted" as const }));
     const requestConfirmation = vi.fn(async () => ({ interactionId: "interaction_new" }));
 
@@ -410,7 +410,7 @@ describe("decideBrowserAction confirm-mutation workflow", () => {
 
   it("stays blocked for good once a human rejects the confirmation, without re-asking", async () => {
     const fetchImpl = sensitiveFetch();
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
     const findConfirmation = vi.fn(async () => ({ id: "interaction_existing", status: "rejected" as const }));
     const requestConfirmation = vi.fn(async () => ({ interactionId: "interaction_new" }));
 
@@ -439,7 +439,7 @@ describe("decideBrowserAction confirm-mutation workflow", () => {
 
   it("opens a new card when a prior one for the same key already expired", async () => {
     const fetchImpl = sensitiveFetch();
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
     const findConfirmation = vi.fn(async () => ({ id: "interaction_stale", status: "expired" as const }));
     const requestConfirmation = vi.fn(async () => ({ interactionId: "interaction_new" }));
 
@@ -462,7 +462,7 @@ describe("decideBrowserAction confirm-mutation workflow", () => {
 
   it("does not request confirmation when no issueId or requestConfirmation hook was provided", async () => {
     const fetchImpl = sensitiveFetch();
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
 
     const result = await decideBrowserAction(
       { goal: GOAL, url: ALLOWED_URL, elements: ELEMENTS },
@@ -474,7 +474,7 @@ describe("decideBrowserAction confirm-mutation workflow", () => {
 
   it("does not corrupt the ledger row when requestConfirmation throws: stays 'blocked', not 'error'", async () => {
     const fetchImpl = sensitiveFetch();
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
     const findConfirmation = vi.fn(async () => null);
     const requestConfirmation = vi.fn(async () => {
       throw new Error("issue thread unavailable");
@@ -516,7 +516,7 @@ describe("decideBrowserAction confirm-mutation workflow", () => {
         }),
       ),
     );
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
     const findConfirmation = vi.fn(async () => null);
     const requestConfirmation = vi.fn(async () => ({ interactionId: "interaction_1" }));
 
@@ -547,7 +547,7 @@ describe("decideBrowserAction confirm-mutation workflow", () => {
 
   it("falls back to 'not found' (and still gates) when findConfirmation throws", async () => {
     const fetchImpl = sensitiveFetch();
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
     const findConfirmation = vi.fn(async () => {
       throw new Error("read failed");
     });

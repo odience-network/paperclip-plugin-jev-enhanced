@@ -1,10 +1,11 @@
 import type { JevConfig, PolicyMode } from "../config.js";
-import type { JevClient } from "../jev/client.js";
+import { answeredByFields, type DecisionPipeline } from "../decision/pipeline.js";
 import type { LedgerDb } from "../ledger/db.js";
 import { beginDecision, completeDecision, type DecisionOutcome } from "../ledger/decisions.js";
 import { policyConfigFor } from "../config.js";
-import { classifyError } from "../jev/errors.js";
-import type { JevAskOutcome } from "../jev/client.js";
+import { classifyError } from "../decision/errors.js";
+import type { JevAskOutcome } from "../decision/pipeline.js";
+import { providerBinding } from "../decision/registry.js";
 import { guardPrePolicy, type GuardPreState } from "./pre.js";
 import { guardPostPolicy, type GuardPostState } from "./post.js";
 import { guardStopPolicy, type GuardStopState } from "./stop.js";
@@ -14,7 +15,7 @@ import type { GuardDecision, GuardEvaluateRequest, GuardEvaluateResult, GuardHoo
 import type { Policy, PolicyContext, PolicyVerdict } from "../policies/types.js";
 
 export interface EvaluateGuardDeps {
-  client: JevClient;
+  client: DecisionPipeline;
   db: LedgerDb;
   rails: RailDeps;
   config: JevConfig;
@@ -84,6 +85,8 @@ function buildState(
 interface AskResolution {
   verdict: PolicyVerdict;
   outcome: JevAskOutcome;
+  /** The policy's mode as bound to the provider that actually answered. */
+  mode: PolicyMode;
 }
 
 type RaceResult = { status: "ok"; value: AskResolution } | { status: "error"; error: unknown } | { status: "timeout" };
@@ -140,7 +143,8 @@ function raceWithTimeout(
 export async function evaluateGuard(request: GuardEvaluateRequest, deps: EvaluateGuardDeps): Promise<GuardEvaluateResult> {
   const started = Date.now();
   const policy = POLICY_FOR_HOOK[request.hookKind];
-  const policyConfig = policyConfigFor(deps.config, policy.name);
+  const primary = deps.client.primary;
+  const policyConfig = policyConfigFor(deps.config, policy.name, providerBinding(primary));
   const ctx: PolicyContext = {
     companyId: deps.companyId,
     issueId: request.issueId ?? null,
@@ -186,9 +190,11 @@ export async function evaluateGuard(request: GuardEvaluateRequest, deps: Evaluat
     policy: policy.name,
     policyVersion: policy.version,
     questionVersion: policy.questionVersion,
-    model: deps.client.resolvedModel,
+    model: primary.model,
     mode: policyConfig.mode,
     toolName: request.toolName ?? null,
+    provider: primary.id,
+    providerKind: primary.kind,
   });
 
   const fallback = fallbackDecision(request.hookKind, policyConfig.mode);
@@ -196,12 +202,16 @@ export async function evaluateGuard(request: GuardEvaluateRequest, deps: Evaluat
   const runAsk = async (): Promise<AskResolution> => {
     const questions = policy.questions(state, ctx);
     const outcome = await deps.client.ask({ policy: policy.name, companyId: deps.companyId, state, questions });
-    const verdict = policy.decide(outcome.result.answers, ctx);
-    return { verdict, outcome };
+    if (outcome.provider === primary) {
+      return { verdict: policy.decide(outcome.result.answers, ctx), outcome, mode: policyConfig.mode };
+    }
+    const answeredConfig = policyConfigFor(deps.config, policy.name, providerBinding(outcome.provider));
+    const verdict = policy.decide(outcome.result.answers, { ...ctx, config: answeredConfig });
+    return { verdict, outcome, mode: answeredConfig.mode };
   };
 
   const onLate = (result: RaceResult) => {
-    void completeFromLateResult(deps, decisionId, policyConfig.mode, result);
+    void completeFromLateResult(deps, decisionId, result);
   };
 
   const raced = await raceWithTimeout(runAsk, deps.config.guardRails.timeBudgetMs, onLate);
@@ -229,9 +239,9 @@ export async function evaluateGuard(request: GuardEvaluateRequest, deps: Evaluat
     };
   }
 
-  const { verdict, outcome } = raced.value;
+  const { verdict, outcome, mode } = raced.value;
   const intended = verdict.verdict as GuardDecision;
-  const finalDecision = effectiveDecision(policyConfig.mode, intended);
+  const finalDecision = effectiveDecision(mode, intended);
   await completeDecision(deps.db, decisionId, {
     stateHash: outcome.stateHash,
     answers: {},
@@ -240,8 +250,10 @@ export async function evaluateGuard(request: GuardEvaluateRequest, deps: Evaluat
     latencyMs: outcome.latencyMs,
     usage: outcome.result.usage,
     costUsd: outcome.costUsd,
-    outcome: outcomeFor(policyConfig.mode, finalDecision),
+    outcome: outcomeFor(mode, finalDecision),
     reason: verdict.reason,
+    ...answeredByFields(outcome),
+    ...(mode !== policyConfig.mode ? { mode } : {}),
   });
   return {
     decision: finalDecision,
@@ -287,6 +299,8 @@ async function recordRailOnlyDecision(
     model: "rails-only",
     mode,
     toolName: request.toolName ?? null,
+    provider: deps.client.primary.id,
+    providerKind: deps.client.primary.kind,
   });
   await completeDecision(deps.db, decisionId, {
     stateHash: "",
@@ -306,7 +320,6 @@ async function recordRailOnlyDecision(
 async function completeFromLateResult(
   deps: EvaluateGuardDeps,
   decisionId: string,
-  mode: PolicyMode,
   result: RaceResult,
 ): Promise<void> {
   if (result.status === "timeout") return;
@@ -314,7 +327,7 @@ async function completeFromLateResult(
     await completeDecision(deps.db, decisionId, errorPatch(Date.now(), result.error));
     return;
   }
-  const { verdict, outcome } = result.value;
+  const { verdict, outcome, mode } = result.value;
   const finalDecision = effectiveDecision(mode, verdict.verdict as GuardDecision);
   await completeDecision(deps.db, decisionId, {
     stateHash: outcome.stateHash,
@@ -326,5 +339,6 @@ async function completeFromLateResult(
     costUsd: outcome.costUsd,
     outcome: outcomeFor(mode, finalDecision),
     reason: `${verdict.reason}-after-timeout`,
+    ...answeredByFields(outcome),
   });
 }

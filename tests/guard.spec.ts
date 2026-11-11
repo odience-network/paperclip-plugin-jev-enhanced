@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Fetch } from "@typesafe-ai/sdk";
-import { JevClient } from "../src/jev/client.js";
+import { createTypesafePipeline } from "../src/decision/registry.js";
 import { jevConfigSchema, type JevConfig } from "../src/config.js";
 import type { LedgerDb } from "../src/ledger/db.js";
 import { runRails, overrideStampKey, type RailDeps, type InteractionsReader } from "../src/guard/rails.js";
@@ -477,7 +477,7 @@ describe("guardStopPolicy.decide", () => {
 
 describe("evaluateGuard", () => {
   function deps(overrides: Partial<EvaluateGuardDeps> = {}, fetchImpl?: Fetch): EvaluateGuardDeps {
-    const client = new JevClient({
+    const client = createTypesafePipeline({
       resolveApiKey: async () => "test-key",
       fetchImpl:
         fetchImpl ??

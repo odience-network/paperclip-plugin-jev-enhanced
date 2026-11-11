@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { jevAnswerSchema } from "../src/jev/types.js";
+import { jevAnswerSchema } from "../src/decision/types.js";
 import type { EvalCase } from "./types.js";
 
 const evalCaseSchema = z.object({

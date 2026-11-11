@@ -13,7 +13,8 @@ export interface DecisionRow {
   outcome: string;
   confidence: number | null;
   margin: number | null;
-  costUsd: number;
+  /** `null` when the answering provider is host-billed (`core`). */
+  costUsd: number | null;
   reason: string | null;
   createdAt: string;
 }
@@ -88,6 +89,6 @@ export function formatPercent(value: number | null): string {
   return value === null ? "—" : `${Math.round(value * 100)}%`;
 }
 
-export function formatCost(value: number): string {
-  return `$${value.toFixed(4)}`;
+export function formatCost(value: number | null): string {
+  return value === null ? "host-billed" : `$${value.toFixed(4)}`;
 }

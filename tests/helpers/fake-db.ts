@@ -10,7 +10,8 @@ export function createFakeDb(): LedgerDb {
     namespace: "plugin_jev_test",
     async execute(sql, params = []) {
       if (sql.includes("INSERT INTO") && sql.includes("jev_decisions")) {
-        const [id, companyId, issueId, runId, agentId, policy, policyVersion, questionVersion, model, stateHash, mode] = params;
+        const [id, companyId, issueId, runId, agentId, policy, policyVersion, questionVersion, model, stateHash, mode, toolName, provider, providerKind, decisionGroupId] =
+          params;
         decisions.push({
           id,
           company_id: companyId,
@@ -31,13 +32,20 @@ export function createFakeDb(): LedgerDb {
           mode,
           outcome: "observed",
           reason: null,
+          tool_name: toolName ?? null,
+          provider,
+          provider_kind: providerKind,
+          rate_version: null,
+          host_invocation_id: null,
+          decision_group_id: decisionGroupId,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
         return { rowCount: 1 };
       }
       if (sql.includes("UPDATE") && sql.includes("jev_decisions")) {
-        const [id, stateHash, answers, confidence, margin, latencyMs, usage, costUsd, outcome, reason] = params;
+        const [id, stateHash, answers, confidence, margin, latencyMs, usage, costUsd, outcome, reason, provider, providerKind, model, rateVersion, hostInvocationId, mode] =
+          params;
         const row = decisions.find((r) => r.id === id);
         if (row) {
           Object.assign(row, {
@@ -50,6 +58,12 @@ export function createFakeDb(): LedgerDb {
             cost_usd: costUsd,
             outcome,
             reason,
+            provider: provider ?? row.provider,
+            provider_kind: providerKind ?? row.provider_kind,
+            model: model ?? row.model,
+            rate_version: rateVersion,
+            host_invocation_id: hostInvocationId,
+            mode: mode ?? row.mode,
             updated_at: new Date().toISOString(),
           });
         }

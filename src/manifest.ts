@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
-import { DEFAULT_JEV_MODEL } from "./jev/models.js";
+import { DEFAULT_JEV_MODEL } from "./decision/models.js";
 
 // Deliberately not `new URL("../skills/...", import.meta.url)`: Vite special-
 // cases that exact literal pattern as a static asset reference and rewrites
@@ -69,23 +69,58 @@ const manifest: PaperclipPluginManifestV1 = {
       apiKeyRef: {
         type: "string",
         format: "secret-ref",
-        title: "TypeSafe API Key",
+        title: "TypeSafe API Key (deprecated)",
         description:
-          "Vault-bound TypeSafe API key from console.typesafe.ai. Required for every live call; health and " +
-          "validate-config degrade gracefully (not blocking) while this is unbound.",
+          "Vault-bound TypeSafe API key from console.typesafe.ai. Deprecated: read as an implicit \"typesafe\" " +
+          "provider when Providers is empty; prefer providers.typesafe.apiKeyRef. Health and validate-config " +
+          "degrade gracefully (not blocking) while this is unbound.",
       },
       model: {
         type: "string",
-        title: "Model",
-        default: DEFAULT_JEV_MODEL,
-        description: "Pinned Jev model version. Aliases such as \"jev-latest\" resolve to a pinned version before use.",
+        title: "Model (deprecated)",
+        description:
+          `Pinned Jev model version for the implicit "typesafe" provider (default ${DEFAULT_JEV_MODEL}). ` +
+          "Aliases such as \"jev-latest\" resolve to a pinned version before use.",
+        "x-paperclip-advanced": true,
       },
       baseUrl: {
         type: "string",
-        title: "Base URL",
+        title: "Base URL (deprecated)",
+        description: "Override the TypeSafe API root for the implicit \"typesafe\" provider. Leave blank to call TypeSafe directly.",
+        "x-paperclip-advanced": true,
+      },
+      providers: {
+        type: "object",
+        title: "Providers",
         description:
-          "Override the TypeSafe API root, for example to route through OpenRouter or the Vercel AI Gateway. " +
-          "Leave blank to call TypeSafe directly.",
+          "Decision providers by alias. Each entry is { kind: \"systemone\", preset, apiKeyRef, model?, baseUrl?, " +
+          "path?, authStyle? } or { kind: \"core\" }. Preset \"typesafe\" sends redacted state text to TypeSafe " +
+          "(api.typesafe.ai; zero data retention on enterprise plans). \"core\" uses the host's own decision " +
+          "service where the host exposes one, holds no credential, and is billed by the host.",
+        additionalProperties: {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["systemone", "core"] },
+            preset: { type: "string", enum: ["typesafe"], default: "typesafe" },
+            apiKeyRef: { type: "string", format: "secret-ref" },
+            model: { type: "string" },
+            baseUrl: { type: "string" },
+            path: { type: "string" },
+            authStyle: { type: "string", enum: ["bearer", "x-api-key", "none"] },
+          },
+          required: ["kind"],
+        },
+      },
+      defaultProvider: {
+        type: "string",
+        title: "Default Provider",
+        description: "Provider alias policies use unless they set their own. Defaults to \"typesafe\".",
+      },
+      shadowProviders: {
+        type: "array",
+        items: { type: "string" },
+        title: "Shadow Providers",
+        description: "Providers to compare against the primary on live traffic (recorded only; wired in a later release).",
         "x-paperclip-advanced": true,
       },
       timeoutMs: {
@@ -108,7 +143,21 @@ const manifest: PaperclipPluginManifestV1 = {
           properties: {
             enabled: { type: "boolean", default: true },
             mode: { type: "string", enum: ["shadow", "suggest", "enforce"], default: "shadow" },
-            thresholds: { type: "object", additionalProperties: { type: "number" } },
+            thresholds: {
+              type: "object",
+              description:
+                "Policy-wide numbers (e.g. confidenceMin), plus optional per-provider overrides keyed " +
+                "\"<provider>/<model>\" (e.g. \"typesafe/jev-1.13.0\": { confidenceMin: 0.75 }).",
+              additionalProperties: {
+                oneOf: [{ type: "number" }, { type: "object", additionalProperties: { type: "number" } }],
+              },
+            },
+            provider: { type: "string", description: "Provider alias for this policy; defaults to defaultProvider." },
+            fallbackProviders: {
+              type: "array",
+              items: { type: "string" },
+              description: "Tried in order when the policy's provider fails or can't take the request.",
+            },
             alwaysAuto: {
               type: "boolean",
               default: false,

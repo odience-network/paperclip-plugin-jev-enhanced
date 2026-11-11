@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { jevQuestionSchema, structuredEntrySchema } from "../jev/types.js";
+import { jevQuestionSchema, structuredEntrySchema } from "../decision/types.js";
 
 /**
  * Caller-supplied identifiers (question names, candidate/skill ids) end up as

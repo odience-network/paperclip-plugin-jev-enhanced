@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import { classifyError } from "../jev/errors.js";
+import { classifyError } from "../decision/errors.js";
 import { runPolicy, type RunPolicyDeps, type RunPolicyResult } from "../policies/run.js";
 import type { Policy } from "../policies/types.js";
 import type { JevConfig } from "../config.js";

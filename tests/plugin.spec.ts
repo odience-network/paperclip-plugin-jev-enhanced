@@ -244,7 +244,41 @@ describe("plugin scaffold", () => {
       apiKeyRef: { type: "secret_ref", secretId: "secret_1" },
     });
     expect(result?.ok).toBe(true);
-    expect(result?.warnings ?? []).toHaveLength(0);
+    // The legacy single-key config still works, but is flagged for migration.
+    expect(result?.warnings ?? []).toHaveLength(1);
+    expect(result?.warnings?.[0]).toMatch(/deprecated.*implicit "typesafe" provider/);
+  });
+
+  it("validateConfig accepts a providers-map config with no warnings when TypeSafe is reachable", async () => {
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities, "events.emit"] });
+    harness.ctx.secrets.resolve = async () => "sk-test";
+    const requestedUrls: string[] = [];
+    harness.ctx.http.fetch = (async (url: string) => {
+      requestedUrls.push(String(url));
+      return new Response(JSON.stringify({ models: [{ id: "jev-1.13.0" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof harness.ctx.http.fetch;
+    await plugin.definition.setup(harness.ctx);
+
+    const result = await plugin.definition.onValidateConfig?.({
+      providers: {
+        typesafe: { kind: "systemone", preset: "typesafe", apiKeyRef: { type: "secret_ref", secretId: "secret_1" } },
+      },
+      defaultProvider: "typesafe",
+    });
+    expect(result).toEqual({ ok: true });
+    expect(requestedUrls).toEqual(["https://api.typesafe.ai/v1/models"]);
+  });
+
+  it("validateConfig rejects core as defaultProvider on a host without a decision capability", async () => {
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities, "events.emit"] });
+    await plugin.definition.setup(harness.ctx);
+
+    const result = await plugin.definition.onValidateConfig?.({ providers: { core: { kind: "core" } }, defaultProvider: "core" });
+    expect(result?.ok).toBe(false);
+    expect(result?.errors?.[0]).toMatch(/core.*unavailable on this host/);
   });
 
   it("validateConfig reports ok:false when TypeSafe rejects the bound key (401/403)", async () => {

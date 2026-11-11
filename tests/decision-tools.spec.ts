@@ -6,7 +6,7 @@ import manifest from "../src/manifest.js";
 import plugin from "../src/worker.js";
 import { WORK_KIND_CATALOG, MODEL_TIER_CATALOG, REVIEW_DEPTH_CATALOG } from "../src/policies/classify-task.js";
 import { VERIFY_RELATION_CATALOG } from "../src/policies/verify.js";
-import { utcDateKey } from "../src/jev/budget.js";
+import { utcDateKey } from "../src/decision/budget.js";
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {

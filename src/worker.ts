@@ -10,13 +10,23 @@ import {
   type EnvSecretRefBinding,
   type PluginPerformActionContext,
 } from "@paperclipai/plugin-sdk";
-import { AuthenticationError, PermissionDeniedError, type Questions } from "@typesafe-ai/sdk";
+import { AuthenticationError, PermissionDeniedError } from "@typesafe-ai/sdk";
 import type { z } from "zod";
 import manifest from "./manifest.js";
 import { parseJevConfig, policyConfigFor, type JevConfig } from "./config.js";
-import { JevClient, MissingApiKeyError } from "./jev/client.js";
-import { createInMemoryJevCache } from "./jev/cache.js";
-import { createPluginStateBudgetStore, BudgetExceededError } from "./jev/budget.js";
+import type { DecisionPipeline } from "./decision/pipeline.js";
+import type { DecisionQuestions } from "./decision/types.js";
+import { createInMemoryJevCache } from "./decision/cache.js";
+import { createPluginStateBudgetStore, BudgetExceededError } from "./decision/budget.js";
+import {
+  buildPolicyPipeline,
+  buildProvider,
+  defaultProviderId,
+  effectiveProviders,
+  validateProviderConfig,
+  type ProviderRuntime,
+} from "./decision/registry.js";
+import { CORE_UNAVAILABLE_REASON } from "./decision/providers/core.js";
 import {
   acquireLease,
   getLatestDecision,
@@ -40,6 +50,7 @@ import {
   runPolicy,
   issueTriagePolicy,
   commentTriagePolicy,
+  browserActionPolicy,
   runOutcomeQaPolicy,
   ISSUE_TYPE_CATALOG,
   type IssueTriageState,
@@ -216,7 +227,7 @@ async function triageIssue(
   const state = await buildIssueTriageState(ctx, companyId, issueId, priorDecision);
   if (!state) return null;
 
-  const client = buildClient(ctx, config);
+  const client = buildClient(ctx, config, issueTriagePolicy.name);
   const result = await runPolicy(
     {
       policy: issueTriagePolicy,
@@ -294,7 +305,7 @@ async function triageComment(
   const state = await buildCommentTriageState(ctx, companyId, issueId, commentId);
   if (!state) return null;
 
-  const client = buildClient(ctx, config);
+  const client = buildClient(ctx, config, commentTriagePolicy.name);
   return runPolicy(
     { policy: commentTriagePolicy, state, config, companyId, issueId },
     { client, db: ctx.db, apply: buildApplyDeps(ctx), suggest: buildSuggestDeps(ctx) },
@@ -351,7 +362,7 @@ async function triageRunOutcome(
   const state = await buildRunOutcomeQaState(ctx, companyId, issueId, runId, runStatus);
   if (!state) return null;
 
-  const client = buildClient(ctx, config);
+  const client = buildClient(ctx, config, runOutcomeQaPolicy.name);
   return runPolicy(
     { policy: runOutcomeQaPolicy, state, config, companyId, issueId, runId },
     { client, db: ctx.db, apply: buildApplyDeps(ctx), suggest: buildSuggestDeps(ctx) },
@@ -390,20 +401,21 @@ async function handleRunLifecycleEvent(ctx: PluginContext, event: PluginEvent): 
  * captures it here for `onApiRequest` (and any future out-of-band hook) to use. */
 let currentContext: PluginContext | undefined;
 
-function buildClient(ctx: PluginContext, config: JevConfig): JevClient {
-  return new JevClient({
-    resolveApiKey: async () => {
-      if (!config.apiKeyRef) {
-        throw new MissingApiKeyError();
-      }
-      return ctx.secrets.resolve(config.apiKeyRef as string | EnvSecretRefBinding);
-    },
-    model: config.model,
-    baseUrl: config.baseUrl,
+function providerRuntime(ctx: PluginContext, config: JevConfig): ProviderRuntime {
+  return {
+    resolveSecret: (ref) => ctx.secrets.resolve(ref as string | EnvSecretRefBinding),
+    host: ctx,
     timeoutMs: config.timeoutMs,
+    fetchImpl: (url, init) => ctx.http.fetch(url, init),
+  };
+}
+
+/** One pipeline per call, over the provider chain `policyName` resolves to
+ * (its `provider`, else `defaultProvider`, then its `fallbackProviders`). */
+function buildClient(ctx: PluginContext, config: JevConfig, policyName: string): DecisionPipeline {
+  return buildPolicyPipeline(config, policyName, providerRuntime(ctx, config), {
     dailyTokenBudget: config.dailyTokenBudget,
     redactionPatterns: config.redactionPatterns,
-    fetchImpl: (url, init) => ctx.http.fetch(url, init),
     cache: jevCache,
     budgetStore: createPluginStateBudgetStore(ctx.state),
   });
@@ -430,7 +442,7 @@ function toolSchema(name: string) {
 }
 
 function toAskState(params: JevAskParams) {
-  return { state: params.state, questions: params.questions as unknown as Questions };
+  return { state: params.state, questions: params.questions as unknown as DecisionQuestions };
 }
 
 function toClassifyTaskState(params: JevClassifyTaskParams) {
@@ -459,7 +471,7 @@ async function runJevTool<TParams, TState>(
   actor: { runId?: string | null; agentId?: string | null } = {},
 ) {
   const config = await loadConfig(ctx, companyId);
-  const client = buildClient(ctx, config);
+  const client = buildClient(ctx, config, policy.name);
   return runDecisionTool(
     {
       rawParams,
@@ -515,7 +527,7 @@ async function handleGuardEvaluate(ctx: PluginContext, input: PluginApiRequestIn
     return { status: 429, body: { error: "rate limit exceeded", decision, reason: "rate-limited" } };
   }
 
-  const client = buildClient(ctx, config);
+  const client = buildClient(ctx, config, POLICY_FOR_HOOK[request.hookKind].name);
   const issue = request.issueId ? await ctx.issues.get(request.issueId, input.companyId) : null;
 
   // `input.actor.runId` is the host-authenticated run id; `request.runId` is
@@ -566,15 +578,22 @@ const PROVIDER_HEALTH_CACHE_MS = 60_000;
 const providerHealthCache = new Map<string, { at: number; health: ProviderHealth }>();
 
 function providerHealthCacheKey(config: JevConfig): string {
-  return JSON.stringify([config.apiKeyRef, config.baseUrl, config.model]);
+  const id = defaultProviderId(config);
+  return JSON.stringify([id, effectiveProviders(config).providers[id]]);
 }
 
 /** Shared by `onHealth` (host health check) and the `dashboard-summary` data
- * handler (UI provider-health metric) so the two never drift. Cached for
- * ~60s: `dashboard-summary` is read on every widget render, and a live
- * `listModels()` call on each one is wasted load against TypeSafe. */
+ * handler (UI provider-health metric) so the two never drift. Checks the
+ * default provider only. Cached for ~60s: `dashboard-summary` is read on
+ * every widget render, and a live `listModels()` call on each one is wasted
+ * load against the provider. */
 async function checkProviderHealth(ctx: PluginContext, config: JevConfig): Promise<ProviderHealth> {
-  if (!config.apiKeyRef) {
+  const id = defaultProviderId(config);
+  const providerConfig = effectiveProviders(config).providers[id];
+  if (!providerConfig) {
+    return { status: "unreachable", message: `defaultProvider "${id}" is not configured` };
+  }
+  if (providerConfig.kind === "systemone" && !providerConfig.apiKeyRef && providerConfig.authStyle !== "none") {
     return { status: "unbound" };
   }
   const key = providerHealthCacheKey(config);
@@ -584,11 +603,19 @@ async function checkProviderHealth(ctx: PluginContext, config: JevConfig): Promi
     return cached.health;
   }
   let health: ProviderHealth;
-  try {
-    const models = await buildClient(ctx, config).listModels();
-    health = { status: "ok", modelCount: models.length };
-  } catch (error) {
-    health = { status: "unreachable", message: error instanceof Error ? error.message : String(error) };
+  const provider = buildProvider(id, providerConfig, providerRuntime(ctx, config));
+  if (provider.kind === "core") {
+    const availability = await provider.availability();
+    health = availability.ok
+      ? { status: "ok", modelCount: 0 }
+      : { status: "unreachable", message: `core: ${availability.reason ?? CORE_UNAVAILABLE_REASON}` };
+  } else {
+    try {
+      const models = (await provider.listModels?.()) ?? [];
+      health = { status: "ok", modelCount: models.length };
+    } catch (error) {
+      health = { status: "unreachable", message: error instanceof Error ? error.message : String(error) };
+    }
   }
   providerHealthCache.set(key, { at: now, health });
   return health;
@@ -609,7 +636,7 @@ const plugin = definePlugin({
         return;
       }
       const config = await loadConfig(ctx, event.companyId);
-      const client = buildClient(ctx, config);
+      const client = buildClient(ctx, config, policies.ping.name);
       try {
         await runPolicy(
           {
@@ -874,7 +901,7 @@ const plugin = definePlugin({
       async (params, runCtx) => {
         const issueId = String((params as { issueId?: string }).issueId ?? "");
         const config = await loadConfig(ctx, runCtx.companyId);
-        const client = buildClient(ctx, config);
+        const client = buildClient(ctx, config, policies.ping.name);
         const result = await runPolicy(
           {
             policy: policies.ping,
@@ -995,7 +1022,7 @@ const plugin = definePlugin({
       },
       async (params, runCtx) => {
         const config = await loadConfig(ctx, runCtx.companyId);
-        const client = buildClient(ctx, config);
+        const client = buildClient(ctx, config, browserActionPolicy.name);
         const result = await decideBrowserAction(params, {
           client,
           db: ctx.db,
@@ -1072,24 +1099,32 @@ const plugin = definePlugin({
 
   async onValidateConfig(rawConfig: Record<string, unknown>): Promise<PluginConfigValidationResult> {
     const parsed = parseJevConfig(rawConfig);
-    if (!parsed.apiKeyRef) {
-      return {
-        ok: true,
-        warnings: [
-          "No TypeSafe API key bound yet. Create a key at console.typesafe.ai, add it to the vault, and bind it " +
-            "to apiKeyRef before Jev can make live calls.",
-        ],
-      };
-    }
-
     const ctx = currentContext;
+    const report = validateProviderConfig(parsed, ctx);
+    if (report.errors.length > 0) {
+      return { ok: false, errors: report.errors, ...(report.warnings.length > 0 ? { warnings: report.warnings } : {}) };
+    }
+    const withWarnings = (extra: string[] = []): PluginConfigValidationResult => {
+      const warnings = [...extra, ...report.warnings];
+      return warnings.length > 0 ? { ok: true, warnings } : { ok: true };
+    };
+
+    const id = defaultProviderId(parsed);
+    const providerConfig = effectiveProviders(parsed).providers[id];
+    if (providerConfig?.kind !== "systemone") return withWarnings();
+    if (!providerConfig.apiKeyRef && providerConfig.authStyle !== "none") {
+      return withWarnings([
+        "No TypeSafe API key bound yet. Create a key at console.typesafe.ai, add it to the vault, and bind it " +
+          "to apiKeyRef before Jev can make live calls.",
+      ]);
+    }
     if (!ctx) {
-      return { ok: true, warnings: ["Plugin worker is not ready yet; could not test the connection."] };
+      return withWarnings(["Plugin worker is not ready yet; could not test the connection."]);
     }
 
     try {
-      await buildClient(ctx, parsed).listModels();
-      return { ok: true };
+      await buildProvider(id, providerConfig, providerRuntime(ctx, parsed)).listModels?.();
+      return withWarnings();
     } catch (error) {
       if (error instanceof AuthenticationError || error instanceof PermissionDeniedError) {
         return {
@@ -1100,13 +1135,10 @@ const plugin = definePlugin({
           ],
         };
       }
-      return {
-        ok: true,
-        warnings: [
-          `Could not verify the connection to TypeSafe: ${error instanceof Error ? error.name : "unknown error"}. ` +
-            "Config was accepted but Test Connection could not confirm the key works.",
-        ],
-      };
+      return withWarnings([
+        `Could not verify the connection to TypeSafe: ${error instanceof Error ? error.name : "unknown error"}. ` +
+          "Config was accepted but Test Connection could not confirm the key works.",
+      ]);
     }
   },
 

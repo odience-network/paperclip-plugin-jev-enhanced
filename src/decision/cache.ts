@@ -17,8 +17,8 @@ export interface InMemoryJevCacheOptions {
   now?: () => number;
 }
 
-/** Process-lifetime LRU cache keyed by policy + model version + canonical
- * state hash. Good enough for a single worker process; a future task can
+/** Process-lifetime LRU cache keyed by policy + provider + model version +
+ * canonical state hash. Good enough for a single worker process; a future task can
  * swap this for a `ctx.state`-backed implementation without touching callers. */
 export function createInMemoryJevCache(options: InMemoryJevCacheOptions = {}): JevCache {
   const maxEntries = options.maxEntries ?? 500;
@@ -50,9 +50,10 @@ export function createInMemoryJevCache(options: InMemoryJevCacheOptions = {}): J
 
 export function cacheKeyFor(input: {
   policy: string;
+  provider: string;
   modelVersion: string;
   stateHash: string;
   questionsHash: string;
 }): string {
-  return `${input.policy}:${input.modelVersion}:${input.stateHash}:${input.questionsHash}`;
+  return `${input.policy}:${input.provider}:${input.modelVersion}:${input.stateHash}:${input.questionsHash}`;
 }

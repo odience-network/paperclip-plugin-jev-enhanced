@@ -1,4 +1,4 @@
-import type { JevAnswer } from "../src/jev/types.js";
+import type { JevAnswer } from "../src/decision/types.js";
 import type { EvalMetrics } from "./metrics.js";
 
 /**

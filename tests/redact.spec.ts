@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redactText, truncateHeadTail } from "../src/jev/redact.js";
+import { redactText, truncateHeadTail } from "../src/decision/redact.js";
 
 describe("redactText", () => {
   it("replaces every pattern match, case-insensitively", () => {

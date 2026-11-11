@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Fetch } from "@typesafe-ai/sdk";
-import { JevClient } from "../src/jev/client.js";
+import { createTypesafePipeline } from "../src/decision/registry.js";
+import type { DecisionPipeline } from "../src/decision/pipeline.js";
 import { issueTriagePolicy, type IssueTriageState } from "../src/policies/issue-triage.js";
 import { runPolicy } from "../src/policies/run.js";
 import type { PolicyContext } from "../src/policies/types.js";
-import type { JevAnswer } from "../src/jev/types.js";
+import type { JevAnswer } from "../src/decision/types.js";
 import { jevConfigSchema, type JevConfig } from "../src/config.js";
 import type { LedgerDb } from "../src/ledger/db.js";
-import { hashState } from "../src/jev/redact.js";
+import { hashState } from "../src/decision/redact.js";
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -381,11 +382,11 @@ describe("issueTriagePolicy via runPolicy", () => {
     return baseConfig({ policies: { "issue-triage": policyConfig(mode).issue_triage_cfg } });
   }
 
-  function fakeClient(answers: Record<string, unknown>): JevClient {
+  function fakeClient(answers: Record<string, unknown>): DecisionPipeline {
     const fetchImpl = vi.fn<Fetch>(async () =>
       jsonResponse({ model: "jev-1.13.0", answers, usage: { input_tokens: 10, output_tokens: 5 } }),
     );
-    return new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    return createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
   }
 
   it("shadow mode only records the decision: no apply or suggest side effects", async () => {
