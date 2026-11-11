@@ -432,6 +432,28 @@ describe("openai adapter specifics", () => {
       { name: "is_bug", type: "predicate", instructions: "is_bug" },
     ]);
   });
+
+  // The prompt cache keys on a shared prefix and the model is order
+  // sensitive: `model`, then `input`, then the questions in the policy's
+  // insertion order (deliberately not alphabetical here), byte for byte.
+  it("serializes the request in a stable, cache-friendly order", async () => {
+    await new DecisionPipeline({ providers: [luna()] }).ask({
+      policy: "p",
+      companyId: "c1",
+      state: { b: 2, a: 1 },
+      questions: {
+        zeta: { type: "score", instructions: "Rate it", criteria: ["low", "high"] },
+        alpha: { type: "choice", instructions: "Pick one", criteria: { y: null, x: "ex" } },
+        mid: { type: "boolean", instructions: "Is it?" },
+      },
+    });
+    expect(server.requests[0].rawBody).toBe(
+      '{"model":"gpt-6-luna","input":"{\\"a\\":1,\\"b\\":2}","questions":[' +
+        '{"name":"zeta","type":"score","instructions":"Rate it","levels":[{"label":"0","description":"low"},{"label":"1","description":"high"}]},' +
+        '{"name":"alpha","type":"choice","instructions":"Pick one","choices":[{"value":"y"},{"value":"x","description":"ex"}]},' +
+        '{"name":"mid","type":"predicate","instructions":"Is it?"}]}',
+    );
+  });
 });
 
 describe("providers config: per-kind validation", () => {
