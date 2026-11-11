@@ -24,7 +24,7 @@ pipeline as every other policy's state before reaching Jev:
 config — **not** a built-in secret scanner; an operator who hasn't added
 patterns for their own secret formats gets no redaction at all, by design,
 since false-positive redaction of ordinary text is also a correctness risk)
-then `truncateHeadTail` (`src/jev/redact.ts`). `guard-post`'s whole purpose
+then `truncateHeadTail` (`src/decision/redact.ts`). `guard-post`'s whole purpose
 is detecting exactly this class of attack in tool *output* before it
 influences the agent's next action — the `injection`/`kind` questions (see
 `src/guard/post.ts`) are not a general content filter, they're scoped to

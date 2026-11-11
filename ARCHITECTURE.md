@@ -17,25 +17,57 @@ src/
                       (JevConfig). SDK-independent and unit-testable on its
                       own; `worker.ts` is the only module that narrows
                       `apiKeyRef` to the SDK's `EnvSecretRefBinding` type.
-  jev/
-    client.ts         JevClient: the only caller of @typesafe-ai/sdk. Owns
-                      canonicalization, redaction, truncation, caching,
-                      budget enforcement, bounded concurrency, and response
-                      validation (see "Jev client pipeline" below).
+  decision/
+    provider.ts        `DecisionProvider` / `ProviderCapabilities` contract:
+                      `id`, `kind` (`systemone|cloudflare|openai|core`),
+                      `preset`, pinned `model`, caps, `verification`
+                      (`live|fixtures`), `billing` (`plugin|host`),
+                      `availability()`, `decide()`, optional `listModels()`
+                      and `estimateCostUsd()` (returns a `rateVersion`).
+    pipeline.ts        `DecisionPipeline`: the provider-agnostic ask
+                      pipeline (see "Decision pipeline" below). Runs a
+                      `[primary, ...fallbacks]` chain.
+    registry.ts        Builds providers from the `providers` config map;
+                      resolves `defaultProvider`, per-policy `provider`,
+                      `fallbackProviders`, `shadowProviders`; reads the
+                      legacy top-level `apiKeyRef`/`model`/`baseUrl` as an
+                      implicit `typesafe` provider; `validateProviderConfig`
+                      for `onValidateConfig`; `providerBinding` for
+                      threshold/mode resolution.
+    providers/
+      systemone.ts     Generic SystemOne HTTP adapter (baseUrl, optional path,
+                      auth header style, secret ref). The only caller of
+                      `@typesafe-ai/sdk`: reuses its retry/timeout/typed
+                      errors and rewrites path and auth header per preset.
+      presets.ts       Named SystemOne presets (base URL, path, auth style,
+                      caps, verification tier, rate card, disclosure). Only
+                      `typesafe` in G1; G4 adds the rest.
+      core.ts          Feature-detects a plugin-facing `ctx.decisions.decide`
+                      on the host. Absent on every released core, so
+                      `availability()` is `{ok: false, reason: "unavailable
+                      on this host"}`. Caps 20 questions / 20 options /
+                      32 KB, `billing: "host"`, no rate card, no secret.
+    rates.ts           Per-provider, per-model rate cards with a version
+                      string recorded in the ledger's `rate_version`.
     canonical.ts       Deterministic state canonicalization + SHA-256 hashing.
     redact.ts          Pattern-based redaction and head/tail truncation.
-    cache.ts           In-memory cache keyed by (policy, model, stateHash,
-                      questionsHash).
+    cache.ts           In-memory cache keyed by (policy, provider, model,
+                      stateHash, questionsHash).
     budget.ts          Daily token/cost budget store, backed by `ctx.state`.
-    models.ts          Model alias resolution + USD cost estimation.
+                      Applied only to `billing: "plugin"` providers.
+    models.ts          `DEFAULT_JEV_MODEL`.
     semaphore.ts        Bounded concurrency primitive (default: 6).
-    types.ts           Zod schemas for the `typesafe_ask` request/response
-                      wire shape (PR #13713) plus `JevAnswer`.
+    types.ts           Zod schemas for the request/response wire shape (PR
+                      #13713) plus `JevAnswer`. Canonical question types
+                      are `boolean`/`choice`/`score`; `noul` is accepted as
+                      an alias and is what goes on the SystemOne wire.
+                      Answers keep the SystemOne shape (`{type: "noul",
+                      noul}` for a boolean question).
     errors.ts           `classifyError()`: maps any thrown error (budget,
-                      missing key, validation, provider) to a short machine
-                      code — never the error's own message — for both the
-                      ledger's `reason` column and the tool/route error
-                      contract.
+                      missing key, validation, capability, unavailable
+                      provider, provider HTTP) to a short machine code —
+                      never the error's own message — for both the ledger's
+                      `reason` column and the tool/route error contract.
   ledger/
     db.ts              `LedgerDb` interface — matches `ctx.db` exactly so the
                       SDK's database client can be passed through unchanged.
@@ -85,14 +117,14 @@ src/
   tools/
     schemas.ts           Zod schemas for every tool's params and the
                       `typesafe_ask` question/answer wire shapes shared with
-                      `jev/types.ts`; the single source of request validation
+                      `decision/types.ts`; the single source of request validation
                       for both the MCP tools and the `/tools/*` routes.
     runTool.ts           `runDecisionTool()`: the shared MCP-tool/API-route
                       dispatch used by `jev-ask`/`jev-classify-task`/
                       `jev-verify`/`jev-rerank` — validates params against
                       the caller's zod schema (`schemas.ts`), calls
                       `runPolicy()`, and maps any failure to a short machine
-                      code via `jev/errors.ts`'s `classifyError`, so a tool
+                      code via `decision/errors.ts`'s `classifyError`, so a tool
                       handler never throws. `statusForToolError()` maps that
                       same code to the HTTP status every `tool-*` API route
                       returns for it.
@@ -110,7 +142,7 @@ src/
 eval/
   types.ts, dataset.ts, metrics.ts, run.ts, fixtures/
                         Recorded-fixture eval runner (`pnpm eval --policy
-                      <name>`); never calls the network or JevClient.
+                      <name>`); never calls the network or DecisionPipeline.
   datasets/             Larger labelled datasets (not just CI fixtures), e.g.
                       `issue-triage.jsonl` (60 rows), `comment-triage.jsonl`
                       (52 rows), `run-outcome-qa.jsonl` (42 rows), used by the
@@ -172,7 +204,12 @@ Two tables in the plugin's own database namespace (`jev`, see
   JSON from the model, not free text), `confidence`, `margin`, `latency_ms`,
   `usage`, `cost_usd`, `mode`, `outcome`
   (`observed|suggested|applied|skipped|blocked|error`), `reason` (a short
-  machine code, not free text).
+  machine code, not free text). `migrations/003_jev_decision_providers.sql`
+  adds `provider` (config alias of the provider that answered),
+  `provider_kind`, `rate_version` and `host_invocation_id` (both null for a
+  host-billed provider, whose `cost_usd` is also null), and
+  `decision_group_id` (joins a primary decision with its shadow-provider
+  decisions; set to the row's own id until shadow calls land in G5).
 - **`jev_feedback`** — human/agent review of a decision: `decision_id`,
   `user_id`/`agent_id`, `verdict` (`accept|override`), `note` (an
   operator-authored review note — not raw issue text).
@@ -197,9 +234,9 @@ incoming event's id before processing `issue.created` (see `worker.ts`).
 Redelivery of the same event within the TTL is a no-op; the lease expires and
 can be re-acquired afterward (covered by `tests/ledger.spec.ts`).
 
-## Jev client pipeline
+## Decision pipeline
 
-`JevClient.ask()` (`src/jev/client.ts`), in order:
+`DecisionPipeline.ask()` (`src/decision/pipeline.ts`), in order:
 
 1. **Canonicalize** state to a deterministic string (`canonical.ts`).
 2. **Redact** configured patterns (`redactionPatterns`), case-insensitively;
@@ -207,28 +244,68 @@ can be re-acquired afterward (covered by `tests/ledger.spec.ts`).
 3. **Truncate** head/tail to `maxStateChars` (default `DEFAULT_MAX_STATE_CHARS`).
 4. **Hash** the result (SHA-256) — this hash, not the text, goes in the
    ledger.
-5. **Cache lookup** keyed by `(policy, model, stateHash, questionsHash)`; a
-   hit short-circuits before any budget check or network call.
-6. **Budget preflight**: reads today's (UTC) usage from `BudgetStore`
-   (`ctx.state`-backed) and fails closed (`BudgetExceededError`) before
-   spending a single token if the daily budget is already exhausted.
-7. **Bounded concurrency**: the actual provider call runs through a
-   semaphore (default max 6 concurrent).
-8. **Provider call** via `@typesafe-ai/sdk`'s `TypeSafeClient.systemOne()`
-   (`POST /v1/systemone`), with the SDK's own retry/backoff (honoring
-   `Retry-After`, configurable `maxRetries`/`backoffInitialMs`/
-   `backoffMaxMs`) plus a per-attempt timeout and a total wall-clock budget
-   layered on top via `AbortSignal.timeout`.
-9. **Strict validation**: the raw response is parsed against
-   `jevAskResultSchema` (zod); a model-echo mismatch or malformed answer
-   shape throws `JevValidationError` rather than being trusted.
+
+Then, for each provider in the policy's `[primary, ...fallbacks]` chain:
+
+5. **Capability pre-check** against the provider's caps (question types,
+   question count, choice options, score levels, request bytes). A miss
+   moves on to the next provider without a call; if no provider fits,
+   `runPolicy` records `skipped` with a bounded reason code
+   (`capability-question-type|max-questions|max-options|max-score-levels|
+   max-request-bytes`).
+6. **Cache lookup** keyed by `(policy, provider, model, stateHash,
+   questionsHash)`; a hit short-circuits before any budget check or network
+   call.
+7. **Budget preflight** (plugin-billed providers only): reads today's (UTC)
+   usage from `BudgetStore` (`ctx.state`-backed) and fails closed
+   (`BudgetExceededError`) before spending a single token if the daily
+   budget is already exhausted.
+8. **Bounded concurrency**: the provider call runs through a semaphore
+   (default max 6 concurrent).
+9. **Provider call**: `provider.decide()` under a total wall-clock budget
+   (`AbortSignal.timeout`). For `systemone`, that is `@typesafe-ai/sdk`'s
+   `TypeSafeClient.systemOne()` with the SDK's own retry/backoff (honoring
+   `Retry-After`) and per-attempt timeout, the preset's path and auth
+   header, and strict validation against `jevAskResultSchema` (a model-echo
+   mismatch or malformed answer throws `JevValidationError`). Any failure
+   moves on to the next provider; the first real failure is rethrown if all
+   fail.
 10. **Budget + cost accounting**: usage is added to the daily budget store;
-    cost is estimated in USD from the model's rate card (`models.ts`).
+    cost and `rateVersion` come from the provider's rate card (`rates.ts`).
+    Host-billed providers record null cost and no rate version.
 11. **Cache write** on success.
 
-The TypeSafe API key is obtained only via `resolveApiKey()`, which
-`worker.ts` wires to `ctx.secrets.resolve(config.apiKeyRef)` — never
-`process.env`. The key is never logged, cached, or written to the ledger.
+The outcome names the provider that answered. `runPolicy`, `guard/evaluate`
+and `jev:decide-browser-action` record it in the ledger and, if a fallback
+answered, re-resolve thresholds and mode for it.
+
+Provider keys are obtained only through the registry's `resolveSecret`,
+which `worker.ts` wires to `ctx.secrets.resolve(apiKeyRef)` — never
+`process.env`. Keys are never logged, cached, or written to the ledger.
+
+### Thresholds and mode per provider
+
+`policyConfigFor(config, policy, providerBinding(provider))` resolves
+`thresholds` by `"<provider>/<model>"` (an object entry under
+`policies.<name>.thresholds`) with fallback to the policy-wide numbers. The
+mode is held at `shadow` when the provider's capabilities say
+`confidence: "none"`, or when the provider is not the baseline TypeSafe
+preset and has no thresholds of its own: a policy promoted on one provider
+stays observe-only on another until it is calibrated there (G5).
+
+### Test layers
+
+- **L1 contract suite** (`tests/provider-contract.spec.ts`, runs in
+  `pnpm test` and CI): an in-process mock SystemOne server
+  (`tests/helpers/mock-systemone-server.ts`) and a suite parameterised over
+  provider configurations, asserting path, auth header, body shape, caps,
+  redaction, no raw state in the ledger, error mapping, timeout, cost and
+  rate version. `core` runs the same contract against a fake host SDK that
+  exposes and withholds `ctx.decisions`.
+- **L3 live smoke** (`pnpm test:live`, `tests/live/`): ping, `listModels`,
+  one boolean, one choice, one score and one refusal per provider whose
+  `VERDICT_LIVE_<PROVIDER>_TOKEN` is set in a gitignored local `.env` (see
+  `.env.example`). Skips without a token. Never wired into CI.
 
 ## Config
 
@@ -236,12 +313,17 @@ Company-scoped, validated by `src/config.ts` (`parseJevConfig`):
 
 | Field | Default | Notes |
 |---|---|---|
-| `apiKeyRef` | — | `format: "secret-ref"`; vault-bound TypeSafe key |
-| `model` | `jev-1.13.0` | Aliases resolve to a pinned version (`jev/models.ts`) |
-| `baseUrl` | TypeSafe default | Override for gateways/proxies |
+| `providers.<id>` | — | `{kind: "systemone", preset, apiKeyRef, model?, baseUrl?, path?, authStyle?}` or `{kind: "core", model?}`. Ids are lowercase letters, digits, dashes |
+| `defaultProvider` | `typesafe` (or the first provider) | Used by every policy without its own `provider` |
+| `shadowProviders` | `[]` | Resolved by the registry; called alongside the primary from G5 |
+| `apiKeyRef` | — | Deprecated. With an empty `providers` map, read as `providers.typesafe.apiKeyRef` (warning in `onValidateConfig`) |
+| `model` | `jev-1.13.0` | Deprecated, as above. Aliases resolve to a pinned version (preset `modelAliases`) |
+| `baseUrl` | TypeSafe default | Deprecated, as above |
 | `timeoutMs` | `10000` | Per-attempt timeout |
 | `dailyTokenBudget` | `5,000,000` | Tokens/company/day across all policies |
 | `policies.<name>` | `{enabled: true, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {}}` | Per-policy |
+| `policies.<name>.provider` / `.fallbackProviders` | `defaultProvider` / `[]` | Primary provider and ordered fallback chain for this policy |
+| `policies.<name>.thresholds` | `{}` | Numbers, plus optional `"<provider>/<model>": {...}` override blocks |
 | `policies.<name>.alwaysAuto` | `false` | Lets this policy apply fields over a human-set value. Never applies to `assigneeUserId`, which Jev can never set regardless of this flag. |
 | `policies.<name>.options` | `{}` | Policy-specific bag, e.g. `issue-triage`'s `issueTypeLabelIds`/`maxBacklogSweepPerRun` (see "Policies > issue-triage" below) |
 | `redactionPatterns` | `[]` | Regexes replaced with `[REDACTED]` before sending |
@@ -258,15 +340,18 @@ something the code enforces automatically.
 
 ## Health and config validation
 
-- **`onHealth`**: loads the instance-level config, and if an `apiKeyRef` is
-  bound, calls `JevClient.listModels()` (`GET /v1/models`) with the resolved
-  key. Returns `ok` if reachable, `degraded` (never blocking) if no key is
-  bound yet or the call fails, with a human-readable `message` in both
-  degraded cases.
-- **`onValidateConfig`** (backs the Test Connection button): returns
-  `{ok: true}` always — a missing `apiKeyRef` surfaces as a warning (create a
-  key at console.typesafe.ai, add it to the vault, bind it to
-  `apiKeyRef`), not an error, so the plugin can be configured incrementally.
+- **`onHealth`**: checks the default provider. For `systemone`, if a key is
+  bound (or `authStyle: "none"`), calls `listModels()` with the resolved
+  key; for `core`, reports `core: unavailable on this host` unless the host
+  exposes the capability. Returns `ok` if reachable, `degraded` (never
+  blocking) otherwise, with a human-readable `message`.
+- **`onValidateConfig`** (backs the Test Connection button): fails on
+  config errors from `validateProviderConfig` (unknown provider references,
+  unknown preset, `core` as `defaultProvider` on a host without the
+  capability). Otherwise `ok: true`; a missing key, the legacy-field
+  deprecation and `core` being unavailable surface as warnings, so the
+  plugin can be configured incrementally. A key the provider rejects (401/403)
+  is an error.
 
 ## Policy framework
 
@@ -276,7 +361,7 @@ A `Policy<TState>` (`src/policies/types.ts`) declares `preFilter(state, ctx)`,
 optionally gated by the original `state`, to a verdict with a per-field
 `fields: FieldDecision[]` breakdown). `runPolicy()` (`src/policies/run.ts`)
 is the only orchestrator: it resolves per-policy config, pre-filters, writes
-the pending ledger row, calls `JevClient.ask()`, decides, completes the
+the pending ledger row, calls `DecisionPipeline.ask()`, decides, completes the
 ledger row, and then — depending on the resolved mode — either calls
 `applyDecision()` (`src/apply/index.ts`, `enforce` only) or
 `suggestDecision()` (`src/suggest/index.ts`, `suggest` only). `shadow` mode
@@ -502,7 +587,7 @@ synthetic dataset — see that report's "Scope note").
 (`eval/fixtures/<name>.jsonl` by default), each row holding a pre-recorded
 `recordedAnswers` plus an `expectedVerdict` and optional `humanVerdict`. It
 calls the real `policy.decide()` directly against those recorded answers —
-never `JevClient`, never the network — and reports accuracy, agreement with
+never `DecisionPipeline`, never the network — and reports accuracy, agreement with
 `humanVerdict`, expected calibration error (10-bin by default), average
 latency/cost, and a threshold sweep (re-running `decide()` at a range of
 threshold values keyed by whatever answer keys appear in the dataset). This
@@ -655,7 +740,7 @@ the namespace per the host's normal plugin-uninstall data-retention policy.
   (short TTL, safely lost on restart — redelivery just re-runs the policy),
   and the daily budget counters (`ctx.state`-backed; also safely reset-able,
   since a lost budget counter only risks a day's overspend, not data loss).
-- Losing the in-memory `JevCache` (`src/jev/cache.ts`) only costs a cache
+- Losing the in-memory `JevCache` (`src/decision/cache.ts`) only costs a cache
   miss on the next identical request; it holds no state that survives a
   worker restart by design.
 - Recovery from a bad deploy is a plugin disable/rollback (see "Deployment"

@@ -10,6 +10,7 @@
     "dev": "node ./esbuild.config.mjs --watch",
     "dev:ui": "paperclip-plugin-dev-server --root . --ui-dir dist/ui --port 4177",
     "test": "vitest run --config ./vitest.config.ts",
+    "test:live": "vitest run --config ./vitest.live.config.ts",
     "typecheck": "tsc --noEmit",
     "eval": "tsx eval/run.ts",
     "eval:bench-guard": "tsx eval/bench-guard-route.ts"
