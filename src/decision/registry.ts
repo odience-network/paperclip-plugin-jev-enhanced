@@ -1,6 +1,7 @@
 import type { Fetch, RetryPolicy } from "@typesafe-ai/sdk";
 import type { VerdictConfig, ProviderBinding, ProviderConfig } from "../config.js";
 import { EgressBlockedError, MissingApiKeyError } from "./errors.js";
+import { DEFAULT_TYPESAFE_MODEL } from "./models.js";
 import { DecisionPipeline, type DecisionPipelineOptions } from "./pipeline.js";
 import { providerModelKey, type DecisionProvider } from "./provider.js";
 import { CLOUDFLARE_API_BASE, CLOUDFLARE_DISCLOSURE, CloudflareProvider } from "./providers/cloudflare.js";
@@ -190,12 +191,14 @@ export function buildPolicyPipeline(
   return new DecisionPipeline({ ...options, providers: buildPolicyProviders(config, policyName, runtime) });
 }
 
-/** What `policyConfigFor` needs to resolve thresholds and mode for `provider`. */
+/** What `policyConfigFor` needs to resolve thresholds and mode for `provider`.
+ * Only TypeSafe on the pinned default model is the baseline: another pinned
+ * version (`jev-1.14.0`) stays shadow-only until it has thresholds of its own. */
 export function providerBinding(provider: DecisionProvider): ProviderBinding {
   return {
     key: providerModelKey(provider),
     confidence: provider.capabilities.confidence,
-    baseline: provider.kind === "systemone" && provider.preset === "typesafe",
+    baseline: provider.kind === "systemone" && provider.preset === "typesafe" && provider.model === DEFAULT_TYPESAFE_MODEL,
   };
 }
 
@@ -251,7 +254,16 @@ export function validateProviderConfig(config: VerdictConfig, host: unknown): Pr
 
   for (const [id, providerConfig] of Object.entries(providers)) {
     if (providerConfig.kind === "systemone") {
-      if (!SYSTEMONE_PRESETS[providerConfig.preset]) errors.push(`providers.${id}: unknown preset "${providerConfig.preset}".`);
+      const preset = SYSTEMONE_PRESETS[providerConfig.preset];
+      if (!preset) {
+        errors.push(`providers.${id}: unknown preset "${providerConfig.preset}".`);
+      } else if (preset.pinnedModels && providerConfig.model) {
+        const requested = providerConfig.model.trim();
+        const model = preset.modelAliases[requested] ?? requested;
+        if (!preset.pinnedModels.includes(model)) {
+          errors.push(`providers.${id}: model "${requested}" is not an allowed ${preset.name} model (${preset.pinnedModels.join(", ")}).`);
+        }
+      }
     } else if (providerConfig.kind === "core" && !coreDetected) {
       warnings.push(`providers.${id}: core: unavailable on this host; it is skipped until the host exposes decisions.`);
     }
