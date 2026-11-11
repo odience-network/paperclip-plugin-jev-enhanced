@@ -1,13 +1,13 @@
 import { APIConnectionError, APIError, APITimeoutError, AuthenticationError, PermissionDeniedError, RateLimitError } from "@typesafe-ai/sdk";
 import { BudgetExceededError } from "./budget.js";
 
-export class JevValidationError extends Error {
+export class VerdictValidationError extends Error {
   constructor(
     message: string,
     public readonly cause?: unknown,
   ) {
     super(message);
-    this.name = "JevValidationError";
+    this.name = "VerdictValidationError";
   }
 }
 
@@ -59,14 +59,14 @@ export class ProviderUnavailableError extends Error {
 
 /**
  * Maps a thrown error to a short, fixed machine code — never the error's own
- * message — so `jev_decisions.reason` never carries free text (which could
+ * message — so `verdict_decisions.reason` never carries free text (which could
  * include request state, URLs, or provider-supplied text) for a failed
  * evaluation. Extend this list rather than falling back to `error.message`.
  */
 export function classifyError(error: unknown): string {
   if (error instanceof BudgetExceededError) return "budget-exceeded";
   if (error instanceof MissingApiKeyError) return "missing-api-key";
-  if (error instanceof JevValidationError) return "validation-failed";
+  if (error instanceof VerdictValidationError) return "validation-failed";
   if (error instanceof CapabilityError) return error.reason;
   if (error instanceof ProviderUnavailableError) return "provider-unavailable";
   if (error instanceof AuthenticationError) return "auth-failed";

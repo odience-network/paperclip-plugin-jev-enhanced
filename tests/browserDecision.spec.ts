@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Fetch } from "@typesafe-ai/sdk";
 import { createTypesafePipeline } from "../src/decision/registry.js";
 import { decideBrowserAction, MAX_BROWSER_ELEMENTS } from "../src/tools/browserDecision.js";
-import { jevConfigSchema, type JevConfig } from "../src/config.js";
+import { verdictConfigSchema, type VerdictConfig } from "../src/config.js";
 import type { LedgerDb } from "../src/ledger/db.js";
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
@@ -16,7 +16,7 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 function createFakeDb(): LedgerDb {
   const rows = new Map<string, Record<string, unknown>>();
   return {
-    namespace: "plugin_jev_test",
+    namespace: "plugin_verdict_test",
     async execute(sql, params = []) {
       if (sql.includes("INSERT INTO")) {
         const [id] = params;
@@ -37,8 +37,8 @@ function createFakeDb(): LedgerDb {
   };
 }
 
-function baseConfig(overrides: Partial<JevConfig> = {}): JevConfig {
-  return jevConfigSchema.parse({ browserAllowedOrigins: ["https://app.example.com"], ...overrides });
+function baseConfig(overrides: Partial<VerdictConfig> = {}): VerdictConfig {
+  return verdictConfigSchema.parse({ browserAllowedOrigins: ["https://app.example.com"], ...overrides });
 }
 
 const GOAL = "Submit the contact form";
@@ -158,7 +158,7 @@ describe("decideBrowserAction origin allowlist", () => {
   });
 });
 
-function suggestConfig(overrides: Partial<JevConfig> = {}) {
+function suggestConfig(overrides: Partial<VerdictConfig> = {}) {
   return baseConfig({
     policies: { "browser-action": { enabled: true, mode: "suggest", thresholds: {}, alwaysAuto: false, options: {} } },
     ...overrides,
@@ -339,7 +339,7 @@ describe("decideBrowserAction confirm-mutation workflow", () => {
       confirmationInteractionId: "interaction_1",
     });
     expect(findConfirmation).toHaveBeenCalledWith(
-      expect.objectContaining({ issueId: "issue_1", idempotencyKey: expect.stringContaining("jev:browser:issue_1:") }),
+      expect.objectContaining({ issueId: "issue_1", idempotencyKey: expect.stringContaining("verdict:browser:issue_1:") }),
     );
     expect(requestConfirmation).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -347,7 +347,7 @@ describe("decideBrowserAction confirm-mutation workflow", () => {
         action: "click",
         targetIndex: 1,
         url: ALLOWED_URL,
-        idempotencyKey: expect.stringContaining("jev:browser:issue_1:"),
+        idempotencyKey: expect.stringContaining("verdict:browser:issue_1:"),
       }),
     );
   });

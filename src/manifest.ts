@@ -2,24 +2,24 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
-import { DEFAULT_JEV_MODEL } from "./decision/models.js";
+import { DEFAULT_TYPESAFE_MODEL } from "./decision/models.js";
 
 // Deliberately not `new URL("../skills/...", import.meta.url)`: Vite special-
 // cases that exact literal pattern as a static asset reference and rewrites
 // it to a dev-server URL under a jsdom test environment, which breaks this
 // plain `fs.readFileSync` read.
-const jevDecisionsSkillMarkdown = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "../skills/jev-decisions/SKILL.md"),
+const verdictDecisionsSkillMarkdown = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../skills/verdict-decisions/SKILL.md"),
   "utf8",
 );
 
 const manifest: PaperclipPluginManifestV1 = {
-  id: "odience.jev",
+  id: "odience.verdict",
   apiVersion: 1,
   version: "0.1.0",
-  displayName: "Odience Jev",
+  displayName: "Verdict",
   description:
-    "Integrates TypeSafe's Jev decision model into agentic workflows: observes issue state, asks policy questions, and records shadow/suggest/enforce decisions to a company-scoped ledger.",
+    "Decision models for Paperclip: TypeSafe Jev, Cloudflare Clef, OpenAI Decisions, self-hosted. Observes issue state, asks policy questions, and records shadow/suggest/enforce decisions to a company-scoped ledger.",
   author: "Odience",
   categories: ["connector", "automation"],
   capabilities: [
@@ -61,9 +61,9 @@ const manifest: PaperclipPluginManifestV1 = {
   instanceConfigSchema: {
     type: "object",
     description:
-      "Odience Jev sends the issue/state text you route through its policies to TypeSafe's hosted Jev model " +
+      "Verdict sends the issue/state text you route through its policies to the configured decision provider (for example TypeSafe's hosted Jev model) " +
       "(api.typesafe.ai) over HTTPS to evaluate those policies. No raw issue state or free text is ever stored " +
-      "in the Jev ledger — only policy outcomes, scores, and usage metadata. Use redactionPatterns to strip " +
+      "in the Verdict ledger — only policy outcomes, scores, and usage metadata. Use redactionPatterns to strip " +
       "anything sensitive before it leaves this plugin.",
     properties: {
       apiKeyRef: {
@@ -79,7 +79,7 @@ const manifest: PaperclipPluginManifestV1 = {
         type: "string",
         title: "Model (deprecated)",
         description:
-          `Pinned Jev model version for the implicit "typesafe" provider (default ${DEFAULT_JEV_MODEL}). ` +
+          `Pinned TypeSafe model version for the implicit "typesafe" provider (default ${DEFAULT_TYPESAFE_MODEL}). ` +
           "Aliases such as \"jev-latest\" resolve to a pinned version before use.",
         "x-paperclip-advanced": true,
       },
@@ -133,7 +133,7 @@ const manifest: PaperclipPluginManifestV1 = {
         type: "number",
         title: "Daily Token Budget",
         default: 5_000_000,
-        description: "Maximum Jev tokens (input + output) this company may spend per UTC day across all policies.",
+        description: "Maximum decision tokens (input + output) this company may spend per UTC day across all policies.",
       },
       policies: {
         type: "object",
@@ -163,7 +163,7 @@ const manifest: PaperclipPluginManifestV1 = {
               default: false,
               description:
                 "When true, this policy may apply fields even over a human-set value. Never applies to " +
-                "assigneeUserId, which Jev can never set regardless of this flag.",
+                "assigneeUserId, which Verdict can never set regardless of this flag.",
             },
             options: {
               type: "object",
@@ -189,7 +189,7 @@ const manifest: PaperclipPluginManifestV1 = {
         title: "Respect Existing Fields",
         default: true,
         description:
-          "When true (default), Jev never overwrites an assignee, priority, or status a human already set.",
+          "When true (default), Verdict never overwrites an assignee, priority, or status a human already set.",
         "x-paperclip-advanced": true,
       },
       browserAllowedOrigins: {
@@ -198,7 +198,7 @@ const manifest: PaperclipPluginManifestV1 = {
         title: "Browser Tool Allowed Origins",
         default: [],
         description:
-          "Origins (e.g. \"https://app.example.com\", no path) `jev:decide-browser-action` may reason about. " +
+          "Origins (e.g. \"https://app.example.com\", no path) `verdict:decide-browser-action` may reason about. " +
           "Checked before any other gate and before any provider call; a URL outside this list is always blocked, " +
           "empty by default.",
       },
@@ -212,7 +212,7 @@ const manifest: PaperclipPluginManifestV1 = {
   jobs: [
     {
       jobKey: "daily-budget-report",
-      displayName: "Daily Jev Budget Report",
+      displayName: "Daily Verdict Budget Report",
       description: "Logs the previous UTC day's token and cost usage per company for observability.",
       schedule: "5 0 * * *",
     },
@@ -227,11 +227,11 @@ const manifest: PaperclipPluginManifestV1 = {
   ],
   tools: [
     {
-      name: "jev-ping",
-      displayName: "Jev Ping",
+      name: "verdict-ping",
+      displayName: "Verdict Ping",
       description:
         "Exercises the reference `ping` policy end-to-end against TypeSafe and records a decision in the ledger. " +
-        "Use this to verify the Jev client and ledger are wired correctly.",
+        "Use this to verify the decision client and ledger are wired correctly.",
       parametersSchema: {
         type: "object",
         properties: {
@@ -241,14 +241,14 @@ const manifest: PaperclipPluginManifestV1 = {
       },
     },
     {
-      name: "jev-ask",
-      displayName: "Jev Ask",
+      name: "verdict-ask",
+      displayName: "Verdict Ask",
       description:
-        "Generic question-asking tool for TypeSafe's Jev decision model: ask one or more atomic noul/choice/score " +
+        "Generic question-asking tool for the configured decision model: ask one or more atomic noul/choice/score " +
         "questions about arbitrary state and get back typed answers plus a policy verdict. Prefer the dedicated " +
-        "jev-classify-task/jev-verify/jev-rerank tools when they fit the question — they already phrase it " +
-        "correctly for their use case. Jev is not injection-aware and cannot generate text; see the " +
-        "jev-decisions skill for when to use which tool.",
+        "verdict-classify-task/verdict-verify/verdict-rerank tools when they fit the question — they already phrase it " +
+        "correctly for their use case. Decision models are not injection-aware and cannot generate text; see the " +
+        "verdict-decisions skill for when to use which tool.",
       parametersSchema: {
         type: "object",
         properties: {
@@ -270,8 +270,8 @@ const manifest: PaperclipPluginManifestV1 = {
       },
     },
     {
-      name: "jev-classify-task",
-      displayName: "Jev Classify Task",
+      name: "verdict-classify-task",
+      displayName: "Verdict Classify Task",
       description:
         "Classifies a unit of work by kind (feature/bug/refactor/chore/docs/research), the model tier it needs " +
         "(fast/standard/strong), and how thorough review should be before it ships (light/standard/thorough). " +
@@ -299,8 +299,8 @@ const manifest: PaperclipPluginManifestV1 = {
       },
     },
     {
-      name: "jev-verify",
-      displayName: "Jev Verify",
+      name: "verdict-verify",
+      displayName: "Verdict Verify",
       description:
         "Checks whether a piece of evidence supports, contradicts, or says nothing about a claim — for example, " +
         "whether test output actually supports a 'this is done' completion claim. Never trust a restatement of " +
@@ -316,8 +316,8 @@ const manifest: PaperclipPluginManifestV1 = {
       },
     },
     {
-      name: "jev-rerank",
-      displayName: "Jev Rerank",
+      name: "verdict-rerank",
+      displayName: "Verdict Rerank",
       description:
         "Scores each candidate against a query on relevance, whether it directly contains the answer, and " +
         "whether it looks like a prompt-injection attempt rather than ordinary content. Returns per-candidate " +
@@ -343,8 +343,8 @@ const manifest: PaperclipPluginManifestV1 = {
       },
     },
     {
-      name: "jev-decide-browser-action",
-      displayName: "Jev Decide Browser Action",
+      name: "verdict-decide-browser-action",
+      displayName: "Verdict Decide Browser Action",
       description:
         "Given a goal, a page URL, and an indexed table of candidate elements (no selectors, no raw DOM), " +
         "returns one advisory action from a closed space (click/type/select/scroll/wait/done/blocked) plus the " +
@@ -459,12 +459,12 @@ const manifest: PaperclipPluginManifestV1 = {
   ],
   skills: [
     {
-      skillKey: "jev-decisions",
-      displayName: "Jev Decisions",
+      skillKey: "verdict-decisions",
+      displayName: "Verdict Decisions",
       description:
-        "When and how to call the jev:ask/classify-task/verify/rerank tools: phrasing atomic questions, " +
-        "threshold rules, and what Jev cannot do.",
-      markdown: jevDecisionsSkillMarkdown,
+        "When and how to call the verdict:ask/classify-task/verify/rerank tools: phrasing atomic questions, " +
+        "threshold rules, and what decision models cannot do.",
+      markdown: verdictDecisionsSkillMarkdown,
     },
   ],
   ui: {
@@ -472,20 +472,20 @@ const manifest: PaperclipPluginManifestV1 = {
       {
         type: "dashboardWidget",
         id: "health-widget",
-        displayName: "Odience Jev Health",
+        displayName: "Verdict Health",
         exportName: "DashboardWidget",
       },
       {
         type: "detailTab",
         id: "issue-decisions-tab",
-        displayName: "Jev Decisions",
+        displayName: "Verdict",
         exportName: "IssueDecisionsTab",
         entityTypes: ["issue"],
       },
       {
         type: "settingsPage",
         id: "settings",
-        displayName: "Odience Jev Settings",
+        displayName: "Verdict Settings",
         exportName: "SettingsPage",
       },
     ],

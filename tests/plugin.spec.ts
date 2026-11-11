@@ -55,7 +55,7 @@ function fakeIssue(overrides: Partial<Issue> = {}): Issue {
 }
 
 /** A bound-and-reachable `askOutcome` for `issue-triage`'s questions, shaped
- * like the fixtures in `tests/jev-client.spec.ts` — `owner: "unassigned"` is
+ * like the fixtures in `tests/verdict-client.spec.ts` — `owner: "unassigned"` is
  * a sentinel `decide()` never turns into an `apply` field write, so this is
  * safe to reuse regardless of mode. */
 function fakeIssueTriageFetch() {

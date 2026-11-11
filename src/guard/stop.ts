@@ -1,5 +1,5 @@
 import { noul } from "@typesafe-ai/sdk";
-import type { JevAnswer } from "../decision/types.js";
+import type { VerdictAnswer } from "../decision/types.js";
 import type { Policy, PolicyContext, PolicyVerdict } from "../policies/types.js";
 import type { GuardDecision } from "./types.js";
 
@@ -37,7 +37,7 @@ export const guardStopPolicy: Policy<GuardStopState> = {
     };
   },
 
-  decide(answers: Record<string, JevAnswer>, ctx: PolicyContext): PolicyVerdict {
+  decide(answers: Record<string, VerdictAnswer>, ctx: PolicyContext): PolicyVerdict {
     const answer = answers.completion_supported;
     const supported = answer?.type === "noul" ? answer.noul : null;
 

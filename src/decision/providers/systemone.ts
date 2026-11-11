@@ -1,8 +1,8 @@
 import { TypeSafeClient, type Fetch, type RetryPolicy } from "@typesafe-ai/sdk";
-import { classifyError, JevValidationError } from "../errors.js";
+import { classifyError, VerdictValidationError } from "../errors.js";
 import type { DecisionProvider, DecisionRequest, ModelCard, ProviderAvailability } from "../provider.js";
 import { estimateCostFromCard, RATE_CARDS } from "../rates.js";
-import { jevAskResultSchema, toSystemOneQuestions, type DecisionResult, type DecisionUsage } from "../types.js";
+import { verdictAskResultSchema, toSystemOneQuestions, type DecisionResult, type DecisionUsage } from "../types.js";
 import type { SystemOneAuthStyle, SystemOnePreset } from "./presets.js";
 
 const SDK_SYSTEMONE_PATH = "/v1/systemone";
@@ -82,12 +82,12 @@ export class SystemOneProvider implements DecisionProvider {
       { timeout: this.timeoutMs, signal: opts.signal },
     );
 
-    const parsed = jevAskResultSchema.safeParse(JSON.parse(JSON.stringify(raw)));
+    const parsed = verdictAskResultSchema.safeParse(JSON.parse(JSON.stringify(raw)));
     if (!parsed.success) {
-      throw new JevValidationError(`Jev response failed validation: ${parsed.error.message}`, parsed.error);
+      throw new VerdictValidationError(`Provider response failed validation: ${parsed.error.message}`, parsed.error);
     }
     if (parsed.data.model !== req.model) {
-      throw new JevValidationError(`Jev model echo mismatch: requested "${req.model}", got "${parsed.data.model}"`);
+      throw new VerdictValidationError(`Provider model echo mismatch: requested "${req.model}", got "${parsed.data.model}"`);
     }
     return parsed.data;
   }

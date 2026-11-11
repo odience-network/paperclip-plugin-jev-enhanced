@@ -211,7 +211,7 @@ company's actual issues via \`GET /api/companies/{companyId}/issues\` and \`/age
 \`state\` (title, description, priority, real agent roster) and \`humanVerdict\` (the
 issue's real, currently-assigned \`assigneeAgentId\`) are real. There is still no live
 TypeSafe binding for this company (same gap noted above for the shadow-run deliverable),
-so there is no real recorded Jev answer to replay here either — \`recordedAnswers.owner\`
+so there is no real recorded provider answer to replay here either — \`recordedAnswers.owner\`
 is a seeded simulated guess that agrees with the real assignee on ~70% of rows by
 construction, not a captured model output. Treat "Agreement" below as validating that
 \`decide()\`'s owner logic produces sane verdicts against real company content and real

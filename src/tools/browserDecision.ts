@@ -4,7 +4,7 @@ import { providerBinding } from "../decision/registry.js";
 import { classifyError } from "../decision/errors.js";
 import { canonicalize, sha256Hex } from "../decision/canonical.js";
 import { beginDecision, completeDecision, type DecisionOutcome, type LedgerDb } from "../ledger/index.js";
-import { policyConfigFor, type JevConfig } from "../config.js";
+import { policyConfigFor, type VerdictConfig } from "../config.js";
 import {
   browserActionPolicy,
   resolveCandidateAction,
@@ -70,7 +70,7 @@ export interface ExistingConfirmation {
 export interface DecideBrowserActionDeps {
   client: DecisionPipeline;
   db: LedgerDb;
-  config: JevConfig;
+  config: VerdictConfig;
   companyId: string;
   runId?: string | null;
   agentId?: string | null;
@@ -109,7 +109,7 @@ export type DecideBrowserActionResult =
       outcome: DecisionOutcome;
       decisionId: string;
       action: BrowserAction;
-      /** The action Jev actually picked, independent of `action` — set
+      /** The action the provider actually picked, independent of `action` — set
        * whenever the `action` answer validated, even when `action` itself
        * had to be forced to `"blocked"` (shadow mode, or still-pending
        * confirmation). This is what a human confirming a card, or an
@@ -145,13 +145,13 @@ function buildConfirmationIdempotencyKey(
   elements: BrowserElement[],
 ): string {
   const hash = sha256Hex(canonicalize({ originAndPath, action, targetIndex, elements }));
-  return `jev:browser:${issueId}:${hash}`;
+  return `verdict:browser:${issueId}:${hash}`;
 }
 
 /**
- * Orchestrates one `jev:decide-browser-action` call end to end: validates
+ * Orchestrates one `verdict:decide-browser-action` call end to end: validates
  * the indexed element table, applies the deterministic origin allowlist
- * rail *before* ever building a provider request, asks Jev, decides, writes
+ * rail *before* ever building a provider request, asks the provider, decides, writes
  * the audit row, and — only when the sensitivity gate blocked a mutating
  * action — opens a `request_confirmation` card so a human can unblock it.
  * Never performs the browser action itself: the result is advisory, the
@@ -264,7 +264,7 @@ export async function decideBrowserAction(
     const targetThreshold = answeredCtx.config.thresholds.target ?? 0.5;
     const sensitive = resolveSensitive(answers, sensitivityThreshold);
     const targetIndex = resolveTargetIndex(answers, targetThreshold);
-    // What Jev actually picked, independent of any gate below — always
+    // What the provider actually picked, independent of any gate below — always
     // populated when the `action` answer validated, so a human (or an
     // operator reading a shadow-mode row) can see the real decision even
     // when `action` itself has to come back `"blocked"`.
@@ -281,7 +281,7 @@ export async function decideBrowserAction(
     if (isShadow) {
       // Every policy ships in shadow with zero effect: no action, no
       // confirmation card — only the ledger row (`outcome: "observed"`,
-      // below) and `observedAction` carry what Jev would have done.
+      // below) and `observedAction` carry what the provider would have done.
       action = "blocked";
       reason = verdict.verdict === "blocked" ? verdict.reason : "shadow-mode";
     } else if (verdict.verdict !== "blocked") {
@@ -299,7 +299,7 @@ export async function decideBrowserAction(
           try {
             existing = await deps.findConfirmation({ issueId: input.issueId, idempotencyKey });
           } catch (error) {
-            deps.log("jev.browser-decision.find-confirmation-failed", { error: classifyError(error) });
+            deps.log("verdict.browser-decision.find-confirmation-failed", { error: classifyError(error) });
           }
         }
         if (existing?.status === "accepted") {
@@ -330,7 +330,7 @@ export async function decideBrowserAction(
       reason = verdict.reason;
     }
 
-    // The ledger records what Jev actually decided this call (promoted to
+    // The ledger records what the provider actually decided this call (promoted to
     // the mode's outcome unless the policy itself blocked it) — distinct
     // from `action`, which is the gated, possibly-overridden result handed
     // back to the harness.
@@ -370,7 +370,7 @@ export async function decideBrowserAction(
         });
         confirmationInteractionId = confirmation.interactionId;
       } catch (error) {
-        deps.log("jev.browser-decision.request-confirmation-failed", { error: classifyError(error) });
+        deps.log("verdict.browser-decision.request-confirmation-failed", { error: classifyError(error) });
       }
     }
 
@@ -403,7 +403,7 @@ export async function decideBrowserAction(
   }
 }
 
-/** `jev:decide-browser-action` is always advisory — the harness performs the
+/** `verdict:decide-browser-action` is always advisory — the harness performs the
  * browser action, never this plugin — so even in `enforce` mode the ledger
  * outcome is `"suggested"`, never `"applied"`. */
 function mapMode(mode: "shadow" | "suggest" | "enforce"): DecisionOutcome {

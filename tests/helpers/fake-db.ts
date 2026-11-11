@@ -7,9 +7,9 @@ export function createFakeDb(): LedgerDb {
   const feedback: Record<string, unknown>[] = [];
 
   return {
-    namespace: "plugin_jev_test",
+    namespace: "plugin_verdict_test",
     async execute(sql, params = []) {
-      if (sql.includes("INSERT INTO") && sql.includes("jev_decisions")) {
+      if (sql.includes("INSERT INTO") && sql.includes("verdict_decisions")) {
         const [id, companyId, issueId, runId, agentId, policy, policyVersion, questionVersion, model, stateHash, mode, toolName, provider, providerKind, decisionGroupId] =
           params;
         decisions.push({
@@ -43,7 +43,7 @@ export function createFakeDb(): LedgerDb {
         });
         return { rowCount: 1 };
       }
-      if (sql.includes("UPDATE") && sql.includes("jev_decisions")) {
+      if (sql.includes("UPDATE") && sql.includes("verdict_decisions")) {
         const [id, stateHash, answers, confidence, margin, latencyMs, usage, costUsd, outcome, reason, provider, providerKind, model, rateVersion, hostInvocationId, mode] =
           params;
         const row = decisions.find((r) => r.id === id);
@@ -69,7 +69,7 @@ export function createFakeDb(): LedgerDb {
         }
         return { rowCount: row ? 1 : 0 };
       }
-      if (sql.includes("INSERT INTO") && sql.includes("jev_feedback")) {
+      if (sql.includes("INSERT INTO") && sql.includes("verdict_feedback")) {
         const [id, decisionId, userId, agentId, verdict, note] = params;
         feedback.push({
           id,
@@ -173,7 +173,7 @@ export function createFakeDb(): LedgerDb {
           .filter((f) => decisionIds.includes(f.decision_id as string))
           .map((f) => ({ ...f, created_at: (f.created_at as string | undefined) ?? new Date().toISOString() })) as T[];
       }
-      if (sql.includes("JOIN") && sql.includes("jev_feedback") && sql.includes("GROUP BY f.verdict")) {
+      if (sql.includes("JOIN") && sql.includes("verdict_feedback") && sql.includes("GROUP BY f.verdict")) {
         const [companyId] = params as [string];
         const companyDecisionIds = new Set(
           decisions.filter((r) => r.company_id === companyId).map((r) => r.id as string),

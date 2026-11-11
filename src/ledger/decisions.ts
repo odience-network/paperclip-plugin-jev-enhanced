@@ -24,7 +24,7 @@ export interface BeginDecisionInput {
    * provider call); `completeDecision` fills in the real value. */
   stateHash?: string;
   mode: PolicyMode;
-  /** Set by JevGuard's Pre/Post hooks (see `src/guard/evaluate.ts`); absent
+  /** Set by VerdictGuard's Pre/Post hooks (see `src/guard/evaluate.ts`); absent
    * for every other policy and for `Stop` (no single tool applies). */
   toolName?: string | null;
   /** The provider the call is about to go to. `completeDecision` overwrites
@@ -159,7 +159,7 @@ function fromDbRow(row: DecisionDbRow): DecisionRow {
 export async function beginDecision(db: LedgerDb, input: BeginDecisionInput): Promise<string> {
   const id = input.id ?? randomUUID();
   await db.execute(
-    `INSERT INTO ${tableName(db, "jev_decisions")}
+    `INSERT INTO ${tableName(db, "verdict_decisions")}
        (id, company_id, issue_id, run_id, agent_id, policy, policy_version, question_version, model, state_hash, mode, outcome, tool_name,
         provider, provider_kind, decision_group_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'observed', $12, $13, $14, $15)`,
@@ -186,7 +186,7 @@ export async function beginDecision(db: LedgerDb, input: BeginDecisionInput): Pr
 
 export async function completeDecision(db: LedgerDb, id: string, patch: CompleteDecisionInput): Promise<void> {
   await db.execute(
-    `UPDATE ${tableName(db, "jev_decisions")}
+    `UPDATE ${tableName(db, "verdict_decisions")}
      SET state_hash = $2,
          answers = $3::jsonb,
          confidence = $4,
@@ -236,7 +236,7 @@ const MAX_DECISION_HISTORY_LIMIT = 100;
  */
 export async function getLatestDecision(db: LedgerDb, companyId: string, issueId: string): Promise<DecisionRow | null> {
   const rows = await db.query<DecisionDbRow>(
-    `SELECT * FROM ${tableName(db, "jev_decisions")}
+    `SELECT * FROM ${tableName(db, "verdict_decisions")}
      WHERE company_id = $1 AND issue_id = $2
      ORDER BY created_at DESC LIMIT 1`,
     [companyId, issueId],
@@ -257,7 +257,7 @@ export async function getLatestDecisionForPolicy(
   policy: string,
 ): Promise<DecisionRow | null> {
   const rows = await db.query<DecisionDbRow>(
-    `SELECT * FROM ${tableName(db, "jev_decisions")}
+    `SELECT * FROM ${tableName(db, "verdict_decisions")}
      WHERE company_id = $1 AND issue_id = $2 AND policy = $3
      ORDER BY created_at DESC LIMIT 1`,
     [companyId, issueId, policy],
@@ -273,7 +273,7 @@ export async function listDecisionHistory(
 ): Promise<DecisionRow[]> {
   const boundedLimit = Math.max(1, Math.min(limit, MAX_DECISION_HISTORY_LIMIT));
   const rows = await db.query<DecisionDbRow>(
-    `SELECT * FROM ${tableName(db, "jev_decisions")}
+    `SELECT * FROM ${tableName(db, "verdict_decisions")}
      WHERE company_id = $1 AND issue_id = $2
      ORDER BY created_at DESC LIMIT $3`,
     [companyId, issueId, boundedLimit],
@@ -300,7 +300,7 @@ export async function listRecentDecisionsForPolicy(
 ): Promise<DecisionRow[]> {
   const boundedLimit = Math.max(1, Math.min(limit, MAX_RECENT_DECISIONS_LIMIT));
   const rows = await db.query<DecisionDbRow>(
-    `SELECT * FROM ${tableName(db, "jev_decisions")}
+    `SELECT * FROM ${tableName(db, "verdict_decisions")}
      WHERE company_id = $1 AND policy = $2
      ORDER BY created_at DESC LIMIT $3`,
     [companyId, policy, boundedLimit],
@@ -313,7 +313,7 @@ export async function listRecentDecisionsForPolicy(
  * (needed before trusting a UI-supplied `decisionId` in the `feedback` action). */
 export async function getDecisionById(db: LedgerDb, companyId: string, id: string): Promise<DecisionRow | null> {
   const rows = await db.query<DecisionDbRow>(
-    `SELECT * FROM ${tableName(db, "jev_decisions")}
+    `SELECT * FROM ${tableName(db, "verdict_decisions")}
      WHERE company_id = $1 AND id = $2 LIMIT 1`,
     [companyId, id],
   );
@@ -331,7 +331,7 @@ export async function listLatestDecisionsByPolicy(
   issueId: string,
 ): Promise<DecisionRow[]> {
   const rows = await db.query<DecisionDbRow>(
-    `SELECT DISTINCT ON (policy) * FROM ${tableName(db, "jev_decisions")}
+    `SELECT DISTINCT ON (policy) * FROM ${tableName(db, "verdict_decisions")}
      WHERE company_id = $1 AND issue_id = $2
      ORDER BY policy, created_at DESC`,
     [companyId, issueId],
@@ -363,7 +363,7 @@ export async function getDailyDecisionStats(
     `SELECT date_trunc('day', created_at AT TIME ZONE 'UTC')::text AS day,
             count(*)::text AS decision_count,
             coalesce(sum(cost_usd), 0)::text AS total_cost_usd
-     FROM ${tableName(db, "jev_decisions")}
+     FROM ${tableName(db, "verdict_decisions")}
      WHERE company_id = $1 AND created_at >= $2
      GROUP BY day
      ORDER BY day`,
@@ -385,7 +385,7 @@ interface ModeSplitDbRow {
 export async function getModeSplit(db: LedgerDb, companyId: string): Promise<Record<PolicyMode, number>> {
   const rows = await db.query<ModeSplitDbRow>(
     `SELECT mode, count(*)::text AS count
-     FROM ${tableName(db, "jev_decisions")}
+     FROM ${tableName(db, "verdict_decisions")}
      WHERE company_id = $1
      GROUP BY mode`,
     [companyId],
@@ -427,13 +427,13 @@ export async function getPolicyAggregate(db: LedgerDb, companyId: string, policy
             avg(confidence)::text AS avg_confidence,
             avg(latency_ms)::text AS avg_latency_ms,
             coalesce(sum(cost_usd), 0)::text AS total_cost_usd
-     FROM ${tableName(db, "jev_decisions")}
+     FROM ${tableName(db, "verdict_decisions")}
      WHERE company_id = $1 AND policy = $2`,
     [companyId, policy],
   );
   const outcomeRows = await db.query<OutcomeCountRow>(
     `SELECT outcome, count(*)::text AS count
-     FROM ${tableName(db, "jev_decisions")}
+     FROM ${tableName(db, "verdict_decisions")}
      WHERE company_id = $1 AND policy = $2
      GROUP BY outcome`,
     [companyId, policy],

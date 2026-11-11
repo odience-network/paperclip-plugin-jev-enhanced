@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Fetch } from "@typesafe-ai/sdk";
 import { createTypesafePipeline } from "../src/decision/registry.js";
-import { jevConfigSchema, type JevConfig } from "../src/config.js";
+import { verdictConfigSchema, type VerdictConfig } from "../src/config.js";
 import type { LedgerDb } from "../src/ledger/db.js";
 import { runRails, overrideStampKey, type RailDeps, type InteractionsReader } from "../src/guard/rails.js";
 import type { LoopGuardState } from "../src/guard/loopGuard.js";
@@ -23,7 +23,7 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 function createFakeDb(): LedgerDb & { rows: Map<string, Record<string, unknown>> } {
   const rows = new Map<string, Record<string, unknown>>();
   return {
-    namespace: "plugin_jev_test",
+    namespace: "plugin_verdict_test",
     rows,
     async execute(sql, params = []) {
       if (sql.includes("INSERT INTO")) {
@@ -77,8 +77,8 @@ function createFakeInteractions(
   };
 }
 
-function baseConfig(overrides: Partial<JevConfig> = {}): JevConfig {
-  return jevConfigSchema.parse({ ...overrides });
+function baseConfig(overrides: Partial<VerdictConfig> = {}): VerdictConfig {
+  return verdictConfigSchema.parse({ ...overrides });
 }
 
 function baseRequest(overrides: Partial<GuardEvaluateRequest> = {}): GuardEvaluateRequest {
@@ -102,28 +102,28 @@ describe("runRails", () => {
     expect(verdict).toEqual({ decision: "allow", reason: "kill-switch-allow-all" });
   });
 
-  it("denies a blocklisted tool without calling Jev", async () => {
+  it("denies a blocklisted tool without calling the provider", async () => {
     const config = baseConfig({ guardRails: { blockedTools: ["Bash"] } as never }).guardRails;
     const deps: RailDeps = { state: createFakeState(), interactions: createFakeInteractions([]) };
     const verdict = await runRails(baseRequest({ toolName: "Bash" }), "company_1", config, deps);
     expect(verdict).toEqual({ decision: "deny", reason: "tool-blocklisted", bypassMode: true });
   });
 
-  it("allows an operator-allowlisted tool without calling Jev", async () => {
+  it("allows an operator-allowlisted tool without calling the provider", async () => {
     const config = baseConfig({ guardRails: { alwaysAllowTools: ["Bash"] } as never }).guardRails;
     const deps: RailDeps = { state: createFakeState(), interactions: createFakeInteractions([]) };
     const verdict = await runRails(baseRequest({ toolName: "Bash" }), "company_1", config, deps);
     expect(verdict).toEqual({ decision: "allow", reason: "tool-always-allowed" });
   });
 
-  it("allows a default read-only tool without calling Jev", async () => {
+  it("allows a default read-only tool without calling the provider", async () => {
     const config = baseConfig().guardRails;
     const deps: RailDeps = { state: createFakeState(), interactions: createFakeInteractions([]) };
     const verdict = await runRails(baseRequest({ toolName: "Read" }), "company_1", config, deps);
     expect(verdict).toEqual({ decision: "allow", reason: "tool-read-only" });
   });
 
-  it("does not rail a non-read-only, non-listed tool (falls through to Jev)", async () => {
+  it("does not rail a non-read-only, non-listed tool (falls through to the provider)", async () => {
     const config = baseConfig().guardRails;
     const deps: RailDeps = { state: createFakeState(), interactions: createFakeInteractions([]) };
     const verdict = await runRails(baseRequest({ toolName: "Edit" }), "company_1", config, deps);
@@ -509,7 +509,7 @@ describe("evaluateGuard", () => {
     };
   }
 
-  it("rails short-circuit and skip the Jev call entirely", async () => {
+  it("rails short-circuit and skip the provider call entirely", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse({}));
     const d = deps(
       {
@@ -632,7 +632,7 @@ describe("evaluateGuard", () => {
     expect(rows[0]?.outcome).toBe("blocked");
   });
 
-  it("fails open to allow on a Jev error when the policy is not enforce", async () => {
+  it("fails open to allow on a provider error when the policy is not enforce", async () => {
     const d = deps({ config: baseConfig({ policies: { "guard-pre": { enabled: true, mode: "suggest", thresholds: {}, alwaysAuto: false, options: {} } } }) }, async () =>
       jsonResponse({ error: "boom" }, { status: 500 }));
     const result = await evaluateGuard(baseRequest({ toolName: "Edit" }), d);
@@ -640,7 +640,7 @@ describe("evaluateGuard", () => {
     expect(result.rail).toBe(false);
   });
 
-  it("fails closed to ask (never deny) on a Jev error when the policy is enforce", async () => {
+  it("fails closed to ask (never deny) on a provider error when the policy is enforce", async () => {
     const d = deps({ config: baseConfig({ policies: { "guard-pre": { enabled: true, mode: "enforce", thresholds: {}, alwaysAuto: false, options: {} } } }) }, async () =>
       jsonResponse({ error: "boom" }, { status: 500 }));
     const result = await evaluateGuard(baseRequest({ toolName: "Edit" }), d);
@@ -656,7 +656,7 @@ describe("evaluateGuard", () => {
     expect(result.decision).toBe("allow");
   });
 
-  it("honors the time budget: times out to the fallback decision rather than waiting on a slow Jev call", async () => {
+  it("honors the time budget: times out to the fallback decision rather than waiting on a slow provider call", async () => {
     const d = deps(
       { config: baseConfig({ guardRails: { timeBudgetMs: 20 } as never, policies: { "guard-pre": { enabled: true, mode: "enforce", thresholds: {}, alwaysAuto: false, options: {} } } }) },
       async () => {
@@ -702,7 +702,7 @@ describe("evaluateGuard", () => {
     expect(rows[0].reason).toContain("after-timeout");
   });
 
-  it("a disabled policy allows without calling Jev", async () => {
+  it("a disabled policy allows without calling the provider", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse({}));
     const d = deps({ config: baseConfig({ policies: { "guard-pre": { enabled: false, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {} } } }) }, fetchImpl);
     const result = await evaluateGuard(baseRequest({ toolName: "Edit" }), d);

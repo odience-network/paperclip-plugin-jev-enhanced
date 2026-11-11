@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { IncomingHttpHeaders } from "node:http";
-import { parseJevConfig } from "../src/config.js";
+import { parseVerdictConfig } from "../src/config.js";
 import { DecisionPipeline } from "../src/decision/pipeline.js";
 import type { DecisionProvider } from "../src/decision/provider.js";
 import { buildProvider, type ProviderRuntime } from "../src/decision/registry.js";
@@ -91,7 +91,7 @@ function runtime(overrides: Partial<ProviderRuntime> = {}): ProviderRuntime {
 }
 
 function providerFor(contract: ContractCase, baseUrl: string, overrides: Partial<ProviderRuntime> = {}): DecisionProvider {
-  const config = parseJevConfig({ providers: { subject: contract.providerConfig(baseUrl) } });
+  const config = parseVerdictConfig({ providers: { subject: contract.providerConfig(baseUrl) } });
   return buildProvider("subject", config.providers.subject, runtime(overrides));
 }
 
@@ -166,7 +166,7 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
     const rawState = { message: "ping from secret-4242 with a distinctive raw phrase" };
 
     const result = await runPolicy(
-      { policy: pingPolicy, state: rawState, config: parseJevConfig({}), companyId: "c1", issueId: "i1" },
+      { policy: pingPolicy, state: rawState, config: parseVerdictConfig({}), companyId: "c1", issueId: "i1" },
       { client: pipeline, db, apply: { log: () => {} }, suggest: { log: () => {} } },
     );
 

@@ -1,5 +1,5 @@
 import { choice, noul } from "@typesafe-ai/sdk";
-import type { JevAnswer } from "../decision/types.js";
+import type { VerdictAnswer } from "../decision/types.js";
 import type { Policy, PolicyContext, PolicyVerdict } from "../policies/types.js";
 import type { GuardDecision } from "./types.js";
 
@@ -42,7 +42,7 @@ export const guardPostPolicy: Policy<GuardPostState> = {
     };
   },
 
-  decide(answers: Record<string, JevAnswer>, ctx: PolicyContext): PolicyVerdict {
+  decide(answers: Record<string, VerdictAnswer>, ctx: PolicyContext): PolicyVerdict {
     const injectionAnswer = answers.injection;
     const injection = injectionAnswer?.type === "noul" ? injectionAnswer.noul : null;
     const kindAnswer = answers.kind;

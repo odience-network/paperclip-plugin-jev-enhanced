@@ -1,9 +1,9 @@
 import { choice, noul } from "@typesafe-ai/sdk";
-import type { JevAnswer } from "../decision/types.js";
+import type { VerdictAnswer } from "../decision/types.js";
 import type { Policy, PolicyContext, PolicyVerdict } from "./types.js";
 
 /**
- * Closed action space for `jev:decide-browser-action` (plan feature F6).
+ * Closed action space for `verdict:decide-browser-action` (plan feature F6).
  * `"blocked"` is a first-class member, not an error path: it is what the
  * policy returns whenever a deterministic gate (confidence, sensitivity,
  * missing target) says the harness must not act yet.
@@ -57,7 +57,7 @@ function targetQuestionKey(index: number): string {
  * original element table) so eval fixtures can exercise it with nothing but
  * recorded answers.
  */
-export function resolveTargetIndex(answers: Record<string, JevAnswer>, threshold: number): number | null {
+export function resolveTargetIndex(answers: Record<string, VerdictAnswer>, threshold: number): number | null {
   let best: { index: number; noul: number } | null = null;
   for (const [key, answer] of Object.entries(answers)) {
     if (answer.type !== "noul") continue;
@@ -74,27 +74,27 @@ export function resolveTargetIndex(answers: Record<string, JevAnswer>, threshold
 
 /** Whether the sensitivity noul (payment, credentials, or destructive)
  * clears `threshold`. Missing or invalid answers fail closed (sensitive). */
-export function resolveSensitive(answers: Record<string, JevAnswer>, threshold: number): boolean {
+export function resolveSensitive(answers: Record<string, VerdictAnswer>, threshold: number): boolean {
   const answer = answers.sensitivity;
   if (!answer || answer.type !== "noul") return true;
   return answer.noul >= threshold;
 }
 
 /**
- * The action Jev's `action` choice answer named, independent of whether
+ * The action the provider's `action` choice answer named, independent of whether
  * `decide()` went on to gate it to `"blocked"`. Callers that need to tell a
  * human what they're being asked to confirm (e.g. the `request_confirmation`
  * prompt) want this, not `PolicyVerdict.verdict`, which collapses every
  * gated case to `"blocked"`.
  */
-export function resolveCandidateAction(answers: Record<string, JevAnswer>): BrowserAction | null {
+export function resolveCandidateAction(answers: Record<string, VerdictAnswer>): BrowserAction | null {
   const answer = answers.action;
   if (!answer || answer.type !== "choice") return null;
   return BROWSER_ACTIONS.includes(answer.choice as BrowserAction) ? (answer.choice as BrowserAction) : null;
 }
 
 /**
- * Asks Jev three things in one call: which closed action to take, whether
+ * Asks the provider three things in one call: which closed action to take, whether
  * the action is high-sensitivity (payment, credentials, destructive), and —
  * via one speculative noul "head" per candidate element — which indexed
  * element is the target. Never sees a selector: the state is this policy's
@@ -142,7 +142,7 @@ export const browserActionPolicy: Policy<BrowserActionState> = {
     };
   },
 
-  decide(answers: Record<string, JevAnswer>, ctx: PolicyContext): PolicyVerdict {
+  decide(answers: Record<string, VerdictAnswer>, ctx: PolicyContext): PolicyVerdict {
     const actionAnswer = answers.action;
     if (!actionAnswer || actionAnswer.type !== "choice") {
       return { verdict: "blocked", confidence: null, margin: null, reason: "missing-or-invalid-action-answer" };

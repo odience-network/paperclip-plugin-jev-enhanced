@@ -1,10 +1,10 @@
-import type { JevConfig, PolicyMode } from "../config.js";
+import type { VerdictConfig, PolicyMode } from "../config.js";
 import { answeredByFields, type DecisionPipeline } from "../decision/pipeline.js";
 import type { LedgerDb } from "../ledger/db.js";
 import { beginDecision, completeDecision, type DecisionOutcome } from "../ledger/decisions.js";
 import { policyConfigFor } from "../config.js";
 import { classifyError } from "../decision/errors.js";
-import type { JevAskOutcome } from "../decision/pipeline.js";
+import type { VerdictAskOutcome } from "../decision/pipeline.js";
 import { providerBinding } from "../decision/registry.js";
 import { guardPrePolicy, type GuardPreState } from "./pre.js";
 import { guardPostPolicy, type GuardPostState } from "./post.js";
@@ -18,7 +18,7 @@ export interface EvaluateGuardDeps {
   client: DecisionPipeline;
   db: LedgerDb;
   rails: RailDeps;
-  config: JevConfig;
+  config: VerdictConfig;
   companyId: string;
   agentId?: string | null;
   /** Issue title/description for `PreToolUse`'s `on_task` and `Stop`'s
@@ -32,7 +32,7 @@ export const POLICY_FOR_HOOK: Record<GuardHookKind, Policy<any>> = {
   Stop: guardStopPolicy,
 };
 
-/** On a Jev timeout or error: a `shadow`/`suggest` policy can't deny anyway,
+/** On a provider timeout or error: a `shadow`/`suggest` policy can't deny anyway,
  * so failing to `allow` changes nothing observable — "fail-open for
  * observation/routing". `Stop` has no `deny` in its decision space at all.
  * Only an `enforce`-mode Pre/Post call can actually block work, so that's
@@ -84,14 +84,14 @@ function buildState(
 
 interface AskResolution {
   verdict: PolicyVerdict;
-  outcome: JevAskOutcome;
+  outcome: VerdictAskOutcome;
   /** The policy's mode as bound to the provider that actually answered. */
   mode: PolicyMode;
 }
 
 type RaceResult = { status: "ok"; value: AskResolution } | { status: "error"; error: unknown } | { status: "timeout" };
 
-/** Races the Jev call against the time budget without ever producing an
+/** Races the provider call against the time budget without ever producing an
  * unhandled rejection: the underlying call's eventual success/failure is
  * always observed by exactly one of `raceWithTimeout`'s own branches or the
  * `onLate` callback passed in when the timeout wins. */
@@ -133,7 +133,7 @@ function raceWithTimeout(
 }
 
 /**
- * Orchestrates one `guard/evaluate` call: rails first (no Jev call if a rail
+ * Orchestrates one `guard/evaluate` call: rails first (no provider call if a rail
  * decides), then the hook-kind-specific policy under a wall-clock budget,
  * then downgrades the intended decision per the policy's `mode`. Always
  * writes exactly one ledger row (via `beginDecision`/`completeDecision`),
@@ -315,7 +315,7 @@ async function recordRailOnlyDecision(
   });
 }
 
-/** Completes the ledger row for a Jev call that finished (or failed) after
+/** Completes the ledger row for a provider call that finished (or failed) after
  * the route had already returned the time-budget fallback to the caller. */
 async function completeFromLateResult(
   deps: EvaluateGuardDeps,

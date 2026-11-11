@@ -40,12 +40,12 @@ export type ApplyFn = (input: ApplyInput, deps: ApplyDeps) => Promise<void>;
 
 /**
  * All side effects of an `enforce`-mode decision live here, never in
- * `src/policies/`. The `ping` reference policy has nothing to apply — Jev
+ * `src/policies/`. The `ping` reference policy has nothing to apply — Verdict
  * must never touch assignee/priority/status on its own, and no real policy
  * ships in `enforce` mode until its eval report clears the bar.
  */
 async function applyPing(input: ApplyInput, deps: ApplyDeps): Promise<void> {
-  deps.log("jev.apply.ping", { verdict: input.verdict.verdict, issueId: input.ctx.issueId ?? null });
+  deps.log("verdict.apply.ping", { verdict: input.verdict.verdict, issueId: input.ctx.issueId ?? null });
 }
 
 /** Builds the `issues.update` patch from only the fields `decide()` marked
@@ -81,7 +81,7 @@ function patchFor(
 async function applyIssueTriage(input: ApplyInput, deps: ApplyDeps): Promise<void> {
   const issueId = input.ctx.issueId;
   if (!issueId || !deps.updateIssue) {
-    deps.log("jev.apply.issue-triage.no-op", { reason: !issueId ? "no-issue-id" : "no-update-issue-dep" });
+    deps.log("verdict.apply.issue-triage.no-op", { reason: !issueId ? "no-issue-id" : "no-update-issue-dep" });
     return;
   }
   const fields = input.verdict.fields ?? [];
@@ -89,19 +89,19 @@ async function applyIssueTriage(input: ApplyInput, deps: ApplyDeps): Promise<voi
   const existingLabelIds = (input.state as { existingLabelIds?: string[] } | undefined)?.existingLabelIds ?? [];
   const patch = patchFor(fields, existingLabelIds, (issueType) => options.issueTypeLabelIds?.[issueType]);
   if (Object.keys(patch).length === 0) {
-    deps.log("jev.apply.issue-triage.nothing-to-apply", { issueId });
+    deps.log("verdict.apply.issue-triage.nothing-to-apply", { issueId });
     return;
   }
   await deps.updateIssue({ issueId, companyId: input.ctx.companyId, patch });
-  deps.log("jev.apply.issue-triage", { issueId, patch: Object.keys(patch) });
+  deps.log("verdict.apply.issue-triage", { issueId, patch: Object.keys(patch) });
 }
 
 /** `ask`/`classify-task`/`verify`/`rerank` never mark a field `"apply"` —
  * these log-only handlers exist so an operator who sets one of these
  * policies to `enforce` by mistake gets a clear log line instead of falling
- * through to `jev.apply.missing-handler`. */
+ * through to `verdict.apply.missing-handler`. */
 async function applyObserveOnly(input: ApplyInput, deps: ApplyDeps): Promise<void> {
-  deps.log(`jev.apply.${input.policy}.no-op`, { reason: "observe-only-policy" });
+  deps.log(`verdict.apply.${input.policy}.no-op`, { reason: "observe-only-policy" });
 }
 
 /**
@@ -112,7 +112,7 @@ async function applyObserveOnly(input: ApplyInput, deps: ApplyDeps): Promise<voi
  * if a guard policy's ledger row is ever replayed through this path.
  */
 async function applyGuard(input: ApplyInput, deps: ApplyDeps): Promise<void> {
-  deps.log("jev.apply.guard", { policy: input.policy, verdict: input.verdict.verdict, runId: input.ctx.runId ?? null });
+  deps.log("verdict.apply.guard", { policy: input.policy, verdict: input.verdict.verdict, runId: input.ctx.runId ?? null });
 }
 
 /** Wakes the assignee when `decide()` marked `wakeupAssignee` as `"apply"` —
@@ -122,7 +122,7 @@ async function applyCommentTriage(input: ApplyInput, deps: ApplyDeps): Promise<v
   const issueId = input.ctx.issueId;
   const wakeupField = (input.verdict.fields ?? []).find((f) => f.field === "wakeupAssignee");
   if (!issueId || !deps.requestWakeup || !wakeupField || wakeupField.action !== "apply") {
-    deps.log("jev.apply.comment-triage.no-op", {
+    deps.log("verdict.apply.comment-triage.no-op", {
       reason: !issueId
         ? "no-issue-id"
         : !deps.requestWakeup
@@ -137,10 +137,10 @@ async function applyCommentTriage(input: ApplyInput, deps: ApplyDeps): Promise<v
   await deps.requestWakeup({
     issueId,
     companyId: input.ctx.companyId,
-    reason: `jev.comment-triage.${input.verdict.verdict}`,
-    idempotencyKey: commentId ? `jev:comment-triage:${commentId}` : undefined,
+    reason: `verdict.comment-triage.${input.verdict.verdict}`,
+    idempotencyKey: commentId ? `verdict:comment-triage:${commentId}` : undefined,
   });
-  deps.log("jev.apply.comment-triage", { issueId, verdict: input.verdict.verdict });
+  deps.log("verdict.apply.comment-triage", { issueId, verdict: input.verdict.verdict });
 }
 
 /** Posts a reviewer-facing comment when `decide()` flagged the run's
@@ -151,7 +151,7 @@ async function applyRunOutcomeQa(input: ApplyInput, deps: ApplyDeps): Promise<vo
   const issueId = input.ctx.issueId;
   const commentField = (input.verdict.fields ?? []).find((f) => f.field === "reviewerComment");
   if (!issueId || !deps.createComment || !commentField || commentField.action !== "apply") {
-    deps.log("jev.apply.run-outcome-qa.no-op", {
+    deps.log("verdict.apply.run-outcome-qa.no-op", {
       reason: !issueId
         ? "no-issue-id"
         : !deps.createComment
@@ -163,14 +163,14 @@ async function applyRunOutcomeQa(input: ApplyInput, deps: ApplyDeps): Promise<vo
     return;
   }
   const lines = [
-    "Jev flagged this run's outcome for review.",
+    "Verdict flagged this run's outcome for review.",
     `- verdict: \`${input.verdict.verdict}\``,
     ...(input.verdict.fields ?? [])
       .filter((f) => f.field !== "reviewerComment")
       .map((f) => `- ${f.field}: \`${JSON.stringify(f.value)}\``),
   ];
   await deps.createComment({ issueId, companyId: input.ctx.companyId, body: lines.join("\n") });
-  deps.log("jev.apply.run-outcome-qa", { issueId, verdict: input.verdict.verdict });
+  deps.log("verdict.apply.run-outcome-qa", { issueId, verdict: input.verdict.verdict });
 }
 
 /**
@@ -179,7 +179,7 @@ async function applyRunOutcomeQa(input: ApplyInput, deps: ApplyDeps): Promise<vo
  * only logs the recommended action for observability.
  */
 async function applyBrowserAction(input: ApplyInput, deps: ApplyDeps): Promise<void> {
-  deps.log("jev.apply.browser-action", { verdict: input.verdict.verdict, issueId: input.ctx.issueId ?? null });
+  deps.log("verdict.apply.browser-action", { verdict: input.verdict.verdict, issueId: input.ctx.issueId ?? null });
 }
 
 export const applyHandlers: Record<string, ApplyFn> = {
@@ -200,7 +200,7 @@ export const applyHandlers: Record<string, ApplyFn> = {
 export async function applyDecision(input: ApplyInput, deps: ApplyDeps): Promise<void> {
   const handler = applyHandlers[input.policy];
   if (!handler) {
-    deps.log("jev.apply.missing-handler", { policy: input.policy });
+    deps.log("verdict.apply.missing-handler", { policy: input.policy });
     return;
   }
   await handler(input, deps);

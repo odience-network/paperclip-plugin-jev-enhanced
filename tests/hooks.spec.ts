@@ -119,7 +119,7 @@ describe("lastAssistantMessage", () => {
   });
 
   it("extracts the last assistant text block from a transcript", () => {
-    dir = mkdtempSync(join(tmpdir(), "jevguard-test-"));
+    dir = mkdtempSync(join(tmpdir(), "verdictguard-test-"));
     const path = join(dir, "transcript.jsonl");
     const lines = [
       JSON.stringify({ type: "user", message: { content: [{ type: "text", text: "do the thing" }] } }),
@@ -136,7 +136,7 @@ describe("lastAssistantMessage", () => {
   });
 
   it("returns an empty string for malformed transcript content", () => {
-    dir = mkdtempSync(join(tmpdir(), "jevguard-test-"));
+    dir = mkdtempSync(join(tmpdir(), "verdictguard-test-"));
     const path = join(dir, "transcript.jsonl");
     writeFileSync(path, "not json\n{also not json");
     expect(lastAssistantMessage(path)).toBe("");

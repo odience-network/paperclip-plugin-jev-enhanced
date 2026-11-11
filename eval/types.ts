@@ -1,4 +1,4 @@
-import type { JevAnswer } from "../src/decision/types.js";
+import type { VerdictAnswer } from "../src/decision/types.js";
 import type { EvalMetrics } from "./metrics.js";
 
 /**
@@ -10,7 +10,7 @@ import type { EvalMetrics } from "./metrics.js";
 export interface EvalCase<TState = unknown> {
   id: string;
   state: TState;
-  recordedAnswers: Record<string, JevAnswer>;
+  recordedAnswers: Record<string, VerdictAnswer>;
   expectedVerdict: string;
   /** Optional separate human label, for measuring model/human agreement
    * distinctly from raw accuracy against the dataset's "ground truth" label. */

@@ -12,13 +12,13 @@ export function IssueDecisionsTab({ context }: PluginDetailTabProps) {
   const [actionError, setActionError] = useState<string | null>(null);
 
   if (latest.loading || history.loading) {
-    return <div>Loading Jev decisions...</div>;
+    return <div>Loading Verdict decisions...</div>;
   }
   if (latest.error) {
-    return <div role="alert">Could not load Jev decisions: {latest.error.message}</div>;
+    return <div role="alert">Could not load Verdict decisions: {latest.error.message}</div>;
   }
   if (history.error) {
-    return <div role="alert">Could not load Jev decision history: {history.error.message}</div>;
+    return <div role="alert">Could not load Verdict decision history: {history.error.message}</div>;
   }
 
   const decisions = latest.data?.decisions ?? [];
@@ -63,7 +63,7 @@ export function IssueDecisionsTab({ context }: PluginDetailTabProps) {
       {actionError ? <div role="alert">{actionError}</div> : null}
 
       {decisions.length === 0 ? (
-        <div>No Jev decisions recorded for this issue yet.</div>
+        <div>No Verdict decisions recorded for this issue yet.</div>
       ) : (
         <div style={{ display: "grid", gap: "0.75rem" }}>
           {decisions.map((decision) => {

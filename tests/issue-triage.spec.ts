@@ -5,8 +5,8 @@ import type { DecisionPipeline } from "../src/decision/pipeline.js";
 import { issueTriagePolicy, type IssueTriageState } from "../src/policies/issue-triage.js";
 import { runPolicy } from "../src/policies/run.js";
 import type { PolicyContext } from "../src/policies/types.js";
-import type { JevAnswer } from "../src/decision/types.js";
-import { jevConfigSchema, type JevConfig } from "../src/config.js";
+import type { VerdictAnswer } from "../src/decision/types.js";
+import { verdictConfigSchema, type VerdictConfig } from "../src/config.js";
 import type { LedgerDb } from "../src/ledger/db.js";
 import { hashState } from "../src/decision/redact.js";
 
@@ -21,7 +21,7 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 function createFakeDb(): LedgerDb {
   const rows = new Map<string, Record<string, unknown>>();
   return {
-    namespace: "plugin_jev_test",
+    namespace: "plugin_verdict_test",
     async execute(sql, params = []) {
       if (sql.includes("INSERT INTO")) {
         const [id] = params;
@@ -42,8 +42,8 @@ function createFakeDb(): LedgerDb {
   };
 }
 
-function baseConfig(overrides: Partial<JevConfig> = {}): JevConfig {
-  return jevConfigSchema.parse({ ...overrides });
+function baseConfig(overrides: Partial<VerdictConfig> = {}): VerdictConfig {
+  return verdictConfigSchema.parse({ ...overrides });
 }
 
 function baseState(overrides: Partial<IssueTriageState> = {}): IssueTriageState {
@@ -78,7 +78,7 @@ function baseCtx(overrides: Partial<PolicyContext> = {}): PolicyContext {
   };
 }
 
-function ownerAnswer(choiceValue: string, confidence = 0.9): JevAnswer {
+function ownerAnswer(choiceValue: string, confidence = 0.9): VerdictAnswer {
   const rest = 1 - confidence;
   // Picks an "other" probability key distinct from `choiceValue` — using a
   // fixed "unassigned" fallback silently collided (and dropped a key) when
@@ -92,7 +92,7 @@ function ownerAnswer(choiceValue: string, confidence = 0.9): JevAnswer {
   };
 }
 
-function priorityAnswer(choiceValue: string, confidence = 0.9): JevAnswer {
+function priorityAnswer(choiceValue: string, confidence = 0.9): VerdictAnswer {
   const rest = 1 - confidence;
   return {
     type: "choice",
@@ -325,7 +325,7 @@ describe("issueTriagePolicy.decide", () => {
     });
     const withoutMapping = baseCtx();
 
-    const answers: Record<string, JevAnswer> = {
+    const answers: Record<string, VerdictAnswer> = {
       owner: ownerAnswer("unassigned", 0.9),
       issueType: { type: "choice", choice: "bug", confidence: 0.9, probabilities: { bug: 0.9, feature: 0.1 } },
     };
@@ -347,7 +347,7 @@ describe("issueTriagePolicy.decide", () => {
       recentOpenIssues: [{ id: "issue_2", identifier: "ODIAA-2", title: "Another bug" }],
     });
     const ctx = baseCtx();
-    const answers: Record<string, JevAnswer> = {
+    const answers: Record<string, VerdictAnswer> = {
       owner: ownerAnswer("unassigned", 0.9),
       complexity: { type: "score", score: 1, legend: { "1": "small" }, confidence: 0.9, probabilities: { "0": 0.05, "1": 0.9, "2": 0.03, "3": 0.02 } },
       needsMoreContext: { type: "noul", noul: 0.9 },
@@ -378,7 +378,7 @@ describe("issueTriagePolicy via runPolicy", () => {
     };
   }
 
-  function configFor(mode: "shadow" | "suggest" | "enforce"): JevConfig {
+  function configFor(mode: "shadow" | "suggest" | "enforce"): VerdictConfig {
     return baseConfig({ policies: { "issue-triage": policyConfig(mode).issue_triage_cfg } });
   }
 

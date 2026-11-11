@@ -34,7 +34,7 @@ export async function main() {
   process.stdout.write(
     JSON.stringify({
       decision: "block",
-      reason: `jevguard flagged this tool's output (${result.decision}): ${result.reason}`,
+      reason: `verdictguard flagged this tool's output (${result.decision}): ${result.reason}`,
     }),
   );
   process.exit(0);
@@ -42,7 +42,7 @@ export async function main() {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((error) => {
-    process.stderr.write(`[jevguard] post-tool-use hook error: ${error?.stack ?? error}\n`);
+    process.stderr.write(`[verdictguard] post-tool-use hook error: ${error?.stack ?? error}\n`);
     process.exit(0);
   });
 }

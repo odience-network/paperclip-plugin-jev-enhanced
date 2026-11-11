@@ -15,7 +15,7 @@ export interface RecordFeedbackInput {
 export async function recordFeedback(db: LedgerDb, input: RecordFeedbackInput): Promise<string> {
   const id = input.id ?? randomUUID();
   await db.execute(
-    `INSERT INTO ${tableName(db, "jev_feedback")} (id, decision_id, user_id, agent_id, verdict, note)
+    `INSERT INTO ${tableName(db, "verdict_feedback")} (id, decision_id, user_id, agent_id, verdict, note)
      VALUES ($1, $2, $3, $4, $5, $6)`,
     [id, input.decisionId, input.userId ?? null, input.agentId ?? null, input.verdict, input.note ?? null],
   );
@@ -59,7 +59,7 @@ function fromFeedbackDbRow(row: FeedbackDbRow): FeedbackRow {
 export async function listFeedbackForDecisions(db: LedgerDb, decisionIds: string[]): Promise<FeedbackRow[]> {
   if (decisionIds.length === 0) return [];
   const rows = await db.query<FeedbackDbRow>(
-    `SELECT * FROM ${tableName(db, "jev_feedback")}
+    `SELECT * FROM ${tableName(db, "verdict_feedback")}
      WHERE decision_id = ANY($1)
      ORDER BY created_at DESC`,
     [decisionIds],
@@ -81,14 +81,14 @@ interface FeedbackVerdictCountRow {
   count: string;
 }
 
-/** Agreement rate for the T5 dashboard widget. `jev_feedback` has no
+/** Agreement rate for the T5 dashboard widget. `verdict_feedback` has no
  * `company_id` column, so scoping to a company requires joining back to
- * `jev_decisions` — the same tenant guard as every other ledger read. */
+ * `verdict_decisions` — the same tenant guard as every other ledger read. */
 export async function getFeedbackSummary(db: LedgerDb, companyId: string): Promise<FeedbackSummary> {
   const rows = await db.query<FeedbackVerdictCountRow>(
     `SELECT f.verdict AS verdict, count(*)::text AS count
-     FROM ${tableName(db, "jev_feedback")} f
-     JOIN ${tableName(db, "jev_decisions")} d ON d.id = f.decision_id
+     FROM ${tableName(db, "verdict_feedback")} f
+     JOIN ${tableName(db, "verdict_decisions")} d ON d.id = f.decision_id
      WHERE d.company_id = $1
      GROUP BY f.verdict`,
     [companyId],

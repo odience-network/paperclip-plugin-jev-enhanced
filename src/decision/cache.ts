@@ -1,17 +1,17 @@
-import type { JevAskResult } from "./types.js";
+import type { VerdictAskResult } from "./types.js";
 
-export interface JevCacheEntry {
-  result: JevAskResult;
+export interface VerdictCacheEntry {
+  result: VerdictAskResult;
   cachedAt: number;
 }
 
 /** Injectable so tests can assert on cache hits/misses without timing games. */
-export interface JevCache {
-  get(key: string): JevCacheEntry | undefined;
-  set(key: string, entry: JevCacheEntry): void;
+export interface VerdictCache {
+  get(key: string): VerdictCacheEntry | undefined;
+  set(key: string, entry: VerdictCacheEntry): void;
 }
 
-export interface InMemoryJevCacheOptions {
+export interface InMemoryVerdictCacheOptions {
   maxEntries?: number;
   ttlMs?: number;
   now?: () => number;
@@ -20,11 +20,11 @@ export interface InMemoryJevCacheOptions {
 /** Process-lifetime LRU cache keyed by policy + provider + model version +
  * canonical state hash. Good enough for a single worker process; a future task can
  * swap this for a `ctx.state`-backed implementation without touching callers. */
-export function createInMemoryJevCache(options: InMemoryJevCacheOptions = {}): JevCache {
+export function createInMemoryVerdictCache(options: InMemoryVerdictCacheOptions = {}): VerdictCache {
   const maxEntries = options.maxEntries ?? 500;
   const ttlMs = options.ttlMs ?? 10 * 60_000;
   const now = options.now ?? Date.now;
-  const store = new Map<string, JevCacheEntry>();
+  const store = new Map<string, VerdictCacheEntry>();
 
   return {
     get(key) {

@@ -1,4 +1,4 @@
-import { DEFAULT_JEV_MODEL } from "../models.js";
+import { DEFAULT_TYPESAFE_MODEL } from "../models.js";
 import type { ProviderCapabilities } from "../provider.js";
 
 /** How the API key is sent. `"none"` is for self-hosted servers with no auth. */
@@ -32,8 +32,8 @@ export const SYSTEMONE_PRESETS: Record<string, SystemOnePreset> = {
     path: "/v1/systemone",
     modelsPath: "/v1/models",
     authStyle: "bearer",
-    defaultModel: DEFAULT_JEV_MODEL,
-    modelAliases: { "jev-latest": DEFAULT_JEV_MODEL, latest: DEFAULT_JEV_MODEL },
+    defaultModel: DEFAULT_TYPESAFE_MODEL,
+    modelAliases: { "jev-latest": DEFAULT_TYPESAFE_MODEL, latest: DEFAULT_TYPESAFE_MODEL },
     capabilities: {
       questionTypes: ["boolean", "choice", "score"],
       maxQuestions: Number.POSITIVE_INFINITY,

@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { jevAnswerSchema } from "../src/decision/types.js";
+import { verdictAnswerSchema } from "../src/decision/types.js";
 import type { EvalCase } from "./types.js";
 
 const evalCaseSchema = z.object({
   id: z.string().min(1),
   state: z.unknown(),
-  recordedAnswers: z.record(z.string(), jevAnswerSchema),
+  recordedAnswers: z.record(z.string(), verdictAnswerSchema),
   expectedVerdict: z.string().min(1),
   humanVerdict: z.string().optional(),
   latencyMs: z.number().optional(),

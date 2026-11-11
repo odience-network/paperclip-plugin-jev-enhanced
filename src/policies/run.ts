@@ -1,9 +1,9 @@
 import { answeredByFields, type DecisionPipeline } from "../decision/pipeline.js";
-import type { JevAnswer } from "../decision/types.js";
+import type { VerdictAnswer } from "../decision/types.js";
 import { CapabilityError, classifyError } from "../decision/errors.js";
 import { providerBinding } from "../decision/registry.js";
 import { beginDecision, completeDecision, type DecisionOutcome, type LedgerDb } from "../ledger/index.js";
-import { policyConfigFor, type JevConfig, type PolicyMode } from "../config.js";
+import { policyConfigFor, type VerdictConfig, type PolicyMode } from "../config.js";
 import { applyDecision, type ApplyDeps } from "../apply/index.js";
 import { postSuggestion, type SuggestDeps } from "../suggest/index.js";
 import { hashState } from "../decision/redact.js";
@@ -12,14 +12,14 @@ import type { Policy, PolicyContext, PolicyVerdict } from "./types.js";
 export interface RunPolicyInput<TState> {
   policy: Policy<TState>;
   state: TState;
-  config: JevConfig;
+  config: VerdictConfig;
   companyId: string;
   issueId?: string | null;
   runId?: string | null;
   agentId?: string | null;
   /** The previous decision's `stateHash` for this issue (from the ledger),
    * if the caller already looked one up. Threaded into `ctx.priorStateHash`
-   * so a policy's `preFilter` can skip re-asking Jev about unchanged state. */
+   * so a policy's `preFilter` can skip re-asking the provider about unchanged state. */
   priorStateHash?: string | null;
 }
 
@@ -114,7 +114,7 @@ export async function runPolicy<TState>(
       answeredBy === primary ? policyConfig : policyConfigFor(input.config, input.policy.name, providerBinding(answeredBy));
     const answeredCtx: PolicyContext =
       answeredConfig === policyConfig ? ctx : { ...ctx, config: answeredConfig, alwaysAuto: answeredConfig.alwaysAuto };
-    const answers = askOutcome.result.answers as Record<string, JevAnswer>;
+    const answers = askOutcome.result.answers as Record<string, VerdictAnswer>;
     const verdict = input.policy.decide(answers, answeredCtx, input.state);
     const outcome = outcomeForMode(answeredConfig.mode);
 

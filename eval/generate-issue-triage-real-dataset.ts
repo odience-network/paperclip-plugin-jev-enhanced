@@ -15,7 +15,7 @@
  * and the owner ground truth (`assigneeAgentId`) here are real, not
  * fabricated. There is no live TypeSafe binding for this company yet (same
  * gap that defers the live shadow-run deliverable), so there is no real
- * recorded Jev answer to replay — `recordedAnswers.owner` is a simulated
+ * recorded provider answer to replay — `recordedAnswers.owner` is a simulated
  * guess seeded off each row's id, independent of the real assignee, so the
  * agreement-with-real-triage metric isn't vacuously 100%. `humanVerdict`
  * (the ground truth this generator reports agreement against) is always the
@@ -24,7 +24,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { JevAnswer } from "../src/decision/types.js";
+import type { VerdictAnswer } from "../src/decision/types.js";
 import type { IssueTriageState, IssueTriageCandidateAgent } from "../src/policies/issue-triage.js";
 import { ISSUE_TYPE_CATALOG } from "../src/policies/issue-triage.js";
 import type { EvalCase } from "./types.js";
@@ -49,7 +49,7 @@ interface Snapshot {
   agents: IssueTriageCandidateAgent[];
 }
 
-function choiceAnswer(labels: string[], pick: string, confidence: number): JevAnswer {
+function choiceAnswer(labels: string[], pick: string, confidence: number): VerdictAnswer {
   const others = labels.filter((l) => l !== pick);
   const rest = 1 - confidence;
   const share = others.length > 0 ? rest / others.length : 0;
@@ -58,7 +58,7 @@ function choiceAnswer(labels: string[], pick: string, confidence: number): JevAn
   return { type: "choice", choice: pick, confidence, probabilities };
 }
 
-function scoreAnswer(legend: Record<string, string>, pickIndex: number, confidence: number): JevAnswer {
+function scoreAnswer(legend: Record<string, string>, pickIndex: number, confidence: number): VerdictAnswer {
   const keys = Object.keys(legend);
   const others = keys.filter((_, i) => i !== pickIndex);
   const rest = 1 - confidence;
@@ -70,7 +70,7 @@ function scoreAnswer(legend: Record<string, string>, pickIndex: number, confiden
   return { type: "score", score: pickIndex, legend, probabilities, confidence };
 }
 
-function noulAnswer(p: number): JevAnswer {
+function noulAnswer(p: number): VerdictAnswer {
   return { type: "noul", noul: p };
 }
 
@@ -107,13 +107,13 @@ function buildRealCase(row: RealIssueRow, roster: IssueTriageCandidateAgent[]): 
 
   // Simulated model guess: agrees with the real assignee ~70% of the time
   // (seeded off the issue id), disagrees onto a different real roster agent
-  // otherwise — stands in for a real Jev answer until shadow mode has one.
+  // otherwise — stands in for a real provider answer until shadow mode has one.
   const agreesWithGroundTruth = seededUnit(row.id) < 0.7;
   const fallback = roster.find((a) => a.id !== row.assigneeAgentId) ?? roster[0];
   const ownerChoice = agreesWithGroundTruth ? row.assigneeAgentId : fallback.id;
   const ownerConfidence = 0.6 + seededUnit(row.id + ":conf") * 0.3;
 
-  const recordedAnswers: Record<string, JevAnswer> = {
+  const recordedAnswers: Record<string, VerdictAnswer> = {
     owner: choiceAnswer(ownerLabels, ownerChoice, ownerConfidence),
     priority: choiceAnswer(["critical", "high", "medium", "low"], row.priority, 0.8),
     issueType: choiceAnswer([...ISSUE_TYPE_CATALOG], "bug", 0.6),

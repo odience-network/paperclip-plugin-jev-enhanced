@@ -35,7 +35,7 @@ export function truncateHeadTail(
   return `${head}\n...[${omitted} characters truncated]...\n${tail}`;
 }
 
-/** Same canonicalize -> redact -> truncate -> hash pipeline `JevClient.ask()`
+/** Same canonicalize -> redact -> truncate -> hash pipeline `VerdictClient.ask()`
  * sends to the provider, exposed standalone so a caller (e.g. a policy's
  * `preFilter`) can compute the hash a given state *would* produce without an
  * actual provider call, and compare it against a previously recorded one. */

@@ -17,7 +17,7 @@ export class BudgetExceededError extends Error {
     public readonly limitTokens: number,
   ) {
     super(
-      `Daily Jev token budget exceeded for company ${companyId} on ${dateKey}: ` +
+      `Daily decision token budget exceeded for company ${companyId} on ${dateKey}: ` +
         `${usage.tokens}/${limitTokens} tokens already used`,
     );
     this.name = "BudgetExceededError";
@@ -54,7 +54,7 @@ export interface PluginStateLike {
 
 export function createPluginStateBudgetStore(state: PluginStateLike): BudgetStore {
   const scopeKeyFor = (companyId: string, dateKey: string) =>
-    ({ scopeKind: "company" as const, scopeId: companyId, namespace: "jev-budget", stateKey: dateKey });
+    ({ scopeKind: "company" as const, scopeId: companyId, namespace: "verdict-budget", stateKey: dateKey });
 
   return {
     async get(companyId, dateKey) {

@@ -1,9 +1,9 @@
 import { noul } from "@typesafe-ai/sdk";
-import type { JevAnswer } from "../decision/types.js";
+import type { VerdictAnswer } from "../decision/types.js";
 import type { Policy, PolicyContext, PolicyVerdict } from "./types.js";
 
 /**
- * Trivial reference policy: asks Jev whether a short message is a "ping",
+ * Trivial reference policy: asks the provider whether a short message is a "ping",
  * and decides "pong" or "no-pong" from the yes/no probability. Exists to
  * exercise the full pipeline (client, ledger, config) end to end, not to
  * encode any real product behavior.
@@ -28,7 +28,7 @@ export const pingPolicy: Policy<PingState> = {
     };
   },
 
-  decide(answers: Record<string, JevAnswer>, ctx: PolicyContext): PolicyVerdict {
+  decide(answers: Record<string, VerdictAnswer>, ctx: PolicyContext): PolicyVerdict {
     const pong = answers.pong;
     if (!pong || pong.type !== "noul") {
       return { verdict: "no-pong", confidence: null, margin: null, reason: "missing-or-invalid-answer" };

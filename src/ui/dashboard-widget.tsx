@@ -6,7 +6,7 @@ export function DashboardWidget({ context }: PluginWidgetProps) {
   const summary = usePluginData<DashboardSummary>("dashboard-summary", { companyId });
 
   if (summary.loading) {
-    return <div>Loading Jev dashboard...</div>;
+    return <div>Loading Verdict dashboard...</div>;
   }
   if (summary.error) {
     return <div role="alert">Plugin error: {summary.error.message}</div>;
@@ -14,7 +14,7 @@ export function DashboardWidget({ context }: PluginWidgetProps) {
 
   const data = summary.data;
   if (!data) {
-    return <div>No Jev data yet.</div>;
+    return <div>No Verdict data yet.</div>;
   }
 
   const totalDecisions = data.dailyStats.reduce((sum, day) => sum + day.decisionCount, 0);
@@ -29,7 +29,7 @@ export function DashboardWidget({ context }: PluginWidgetProps) {
 
   return (
     <div style={{ display: "grid", gap: "0.5rem" }}>
-      <strong>Odience Jev</strong>
+      <strong>Verdict</strong>
       <div>Decisions (30d): {totalDecisions}</div>
       <div>Cost (30d): ${totalCost.toFixed(4)}</div>
       <div>

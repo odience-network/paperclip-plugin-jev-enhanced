@@ -8,7 +8,7 @@ export interface LoopGuardState {
   set(input: { scopeKind: "run"; scopeId: string; namespace: string; stateKey: string }, value: unknown): Promise<void>;
 }
 
-const NAMESPACE = "jev-guard-loop";
+const NAMESPACE = "verdict-guard-loop";
 const STATE_KEY = "recent-calls";
 
 interface LoopRecord {
@@ -20,7 +20,7 @@ interface LoopRecord {
  * Tracks the most recent `(tool, inputHash)` pairs for a run in a small
  * fixed-size window and reports whether the current call repeats at or above
  * `config.threshold` times inside that window — e.g. the agent retrying the
- * same failing `Bash` command over and over. Runs BEFORE any Jev call: a
+ * same failing `Bash` command over and over. Runs BEFORE any provider call: a
  * genuine loop should never cost a provider round trip to detect.
  */
 export async function checkLoopGuard(

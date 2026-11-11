@@ -3,7 +3,7 @@ import type { Fetch } from "@typesafe-ai/sdk";
 import { createTypesafePipeline } from "../src/decision/registry.js";
 import { pingPolicy } from "../src/policies/ping.js";
 import { runPolicy } from "../src/policies/run.js";
-import { jevConfigSchema, type JevConfig } from "../src/config.js";
+import { verdictConfigSchema, type VerdictConfig } from "../src/config.js";
 import type { LedgerDb } from "../src/ledger/db.js";
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
@@ -17,7 +17,7 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 function createFakeDb(): LedgerDb {
   const rows = new Map<string, Record<string, unknown>>();
   return {
-    namespace: "plugin_jev_test",
+    namespace: "plugin_verdict_test",
     async execute(sql, params = []) {
       if (sql.includes("INSERT INTO")) {
         const [id] = params;
@@ -38,8 +38,8 @@ function createFakeDb(): LedgerDb {
   };
 }
 
-function baseConfig(overrides: Partial<JevConfig> = {}): JevConfig {
-  return jevConfigSchema.parse({ ...overrides });
+function baseConfig(overrides: Partial<VerdictConfig> = {}): VerdictConfig {
+  return verdictConfigSchema.parse({ ...overrides });
 }
 
 describe("pingPolicy", () => {
@@ -151,7 +151,7 @@ describe("runPolicy", () => {
     );
 
     expect(result).toMatchObject({ outcome: "applied" });
-    expect(applyLog).toHaveBeenCalledWith("jev.apply.ping", expect.objectContaining({ verdict: "pong" }));
+    expect(applyLog).toHaveBeenCalledWith("verdict.apply.ping", expect.objectContaining({ verdict: "pong" }));
   });
 
   it("records outcome 'error' and rethrows when the provider call fails", async () => {

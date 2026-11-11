@@ -14,7 +14,7 @@ const booleanQuestionShape = {
  * Adopted shape-for-shape from `typesafeAskSchema` in Paperclip core PR #13713
  * (packages/shared/src/typesafe.ts) so this client's request/response contract
  * stays swappable for a future core TypeSafe connection without a migration.
- * Exported so `src/tools/schemas.ts` can validate the generic `jev:ask`
+ * Exported so `src/tools/schemas.ts` can validate the generic `verdict:ask`
  * tool's `questions` param against the exact same shape, without duplicating it.
  *
  * Canonical question types are `boolean` / `choice` / `score`. `noul` is the
@@ -23,7 +23,7 @@ const booleanQuestionShape = {
  * the SystemOne shape (`{type:"noul", noul}`) for a boolean question, since
  * every policy, fixture and eval dataset consumes that shape.
  */
-export const jevQuestionSchema = z.discriminatedUnion("type", [
+export const verdictQuestionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("boolean"), ...booleanQuestionShape }).strict(),
   z.object({ type: z.literal("noul"), ...booleanQuestionShape }).strict(),
   z
@@ -45,17 +45,17 @@ export const jevQuestionSchema = z.discriminatedUnion("type", [
     .strict(),
 ]);
 
-export const jevAskRequestSchema = z
+export const verdictAskRequestSchema = z
   .object({
     state: structured,
     questions: z
-      .record(z.string().min(1), jevQuestionSchema)
+      .record(z.string().min(1), verdictQuestionSchema)
       .refine((value) => Object.keys(value).length >= 1, "At least one question is required"),
     model: z.string().min(1).max(100).optional(),
     connectionId: z.string().uuid().optional(),
   })
   .strict();
-export type JevAskRequest = z.infer<typeof jevAskRequestSchema>;
+export type VerdictAskRequest = z.infer<typeof verdictAskRequestSchema>;
 
 const PROBABILITY_SUM_TOLERANCE = 0.01;
 const ARGMAX_TIE_TOLERANCE = 1e-6;
@@ -106,19 +106,19 @@ const scoreAnswerSchema = z
     }
   });
 
-export const jevAnswerSchema = z.discriminatedUnion("type", [noulAnswerSchema, choiceAnswerSchema, scoreAnswerSchema]);
-export type JevAnswer = z.infer<typeof jevAnswerSchema>;
+export const verdictAnswerSchema = z.discriminatedUnion("type", [noulAnswerSchema, choiceAnswerSchema, scoreAnswerSchema]);
+export type VerdictAnswer = z.infer<typeof verdictAnswerSchema>;
 
-export const jevAskResultSchema = z
+export const verdictAskResultSchema = z
   .object({
     model: z.string().min(1),
     answers: z
-      .record(z.string(), jevAnswerSchema)
+      .record(z.string(), verdictAnswerSchema)
       .refine((value) => Object.keys(value).length >= 1, "At least one answer is required"),
     usage: z.object({ input_tokens: z.number().int().min(0), output_tokens: z.number().int().min(0) }).strict(),
   })
   .strict();
-export type JevAskResult = z.infer<typeof jevAskResultSchema>;
+export type VerdictAskResult = z.infer<typeof verdictAskResultSchema>;
 
 /** Canonical name for a yes/no question; same shape as SystemOne's `noul`. */
 export type BooleanQuestion = Omit<NoulQuestion, "type"> & { type: "boolean" };
@@ -140,6 +140,6 @@ export function toSystemOneQuestions(questions: DecisionQuestions): Questions {
   return wire;
 }
 
-export type DecisionAnswer = JevAnswer;
-export type DecisionResult = JevAskResult;
-export type DecisionUsage = JevAskResult["usage"];
+export type DecisionAnswer = VerdictAnswer;
+export type DecisionResult = VerdictAskResult;
+export type DecisionUsage = VerdictAskResult["usage"];

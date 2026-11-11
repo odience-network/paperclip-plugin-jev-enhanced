@@ -13,10 +13,10 @@ import {
 import { AuthenticationError, PermissionDeniedError } from "@typesafe-ai/sdk";
 import type { z } from "zod";
 import manifest from "./manifest.js";
-import { parseJevConfig, policyConfigFor, type JevConfig } from "./config.js";
+import { parseVerdictConfig, policyConfigFor, type VerdictConfig } from "./config.js";
 import type { DecisionPipeline } from "./decision/pipeline.js";
 import type { DecisionQuestions } from "./decision/types.js";
-import { createInMemoryJevCache } from "./decision/cache.js";
+import { createInMemoryVerdictCache } from "./decision/cache.js";
 import { createPluginStateBudgetStore, BudgetExceededError } from "./decision/budget.js";
 import {
   buildPolicyPipeline,
@@ -64,14 +64,14 @@ import type { ApplyDeps } from "./apply/index.js";
 import type { SuggestDeps } from "./suggest/index.js";
 import { runDecisionTool, statusForToolError } from "./tools/runTool.js";
 import {
-  jevAskParamsSchema,
-  jevClassifyTaskParamsSchema,
-  jevVerifyParamsSchema,
-  jevRerankParamsSchema,
-  type JevAskParams,
-  type JevClassifyTaskParams,
-  type JevVerifyParams,
-  type JevRerankParams,
+  verdictAskParamsSchema,
+  verdictClassifyTaskParamsSchema,
+  verdictVerifyParamsSchema,
+  verdictRerankParamsSchema,
+  type VerdictAskParams,
+  type VerdictClassifyTaskParams,
+  type VerdictVerifyParams,
+  type VerdictRerankParams,
 } from "./tools/schemas.js";
 import { guardEvaluateRequestSchema } from "./guard/types.js";
 import { evaluateGuard, fallbackDecision, POLICY_FOR_HOOK } from "./guard/evaluate.js";
@@ -79,7 +79,7 @@ import { createGuardRateLimiter, type GuardRateLimiter } from "./guard/rateLimit
 import { decideBrowserAction } from "./tools/browserDecision.js";
 import { CALIBRATION_REPORTS } from "./eval-reports/index.js";
 
-const jevCache = createInMemoryJevCache();
+const verdictCache = createInMemoryVerdictCache();
 
 /** One rate limiter per company, sized from that company's own
  * `guardRails.rateLimit` config the first time `guard/evaluate` sees it. A
@@ -87,7 +87,7 @@ const jevCache = createInMemoryJevCache();
  * acceptable for a DoS backstop whose defaults are the same for everyone. */
 const guardRateLimiters = new Map<string, GuardRateLimiter>();
 
-function guardRateLimiterFor(companyId: string, config: JevConfig): GuardRateLimiter {
+function guardRateLimiterFor(companyId: string, config: VerdictConfig): GuardRateLimiter {
   let limiter = guardRateLimiters.get(companyId);
   if (!limiter) {
     limiter = createGuardRateLimiter(config.guardRails.rateLimit.requestsPerSecond, config.guardRails.rateLimit.tokensPerSecond);
@@ -97,7 +97,7 @@ function guardRateLimiterFor(companyId: string, config: JevConfig): GuardRateLim
 }
 
 /** Rough, cheap token estimate for the rate limiter — not the billed usage
- * (that comes back from Jev itself after the call). Good enough to size a
+ * (that comes back from the provider itself after the call). Good enough to size a
  * DoS backstop; off by 2x in either direction doesn't matter here. */
 function estimateRequestTokens(excerpt: string | undefined): number {
   return 200 + Math.ceil((excerpt?.length ?? 0) / 4);
@@ -105,7 +105,7 @@ function estimateRequestTokens(excerpt: string | undefined): number {
 
 /** This plugin's own `originKind` — `preFilter` uses it to never triage an
  * issue the plugin itself created, matching `manifest.ts`'s `id`. */
-const PLUGIN_ORIGIN_KIND = "plugin:odience.jev";
+const PLUGIN_ORIGIN_KIND = "plugin:odience.verdict";
 
 function buildApplyDeps(ctx: PluginContext): ApplyDeps {
   return {
@@ -152,7 +152,7 @@ function titleDescriptionFingerprint(title: string, description: string | null):
 }
 
 /**
- * Builds the state `issue-triage` asks Jev about. Returns `null` when the
+ * Builds the state `issue-triage` asks the provider about. Returns `null` when the
  * issue can't be found (e.g. deleted between the event firing and the
  * handler running) — callers treat that as nothing to do, not an error.
  */
@@ -260,7 +260,7 @@ async function triageIssue(
 }
 
 /**
- * Builds the state `comment-triage` asks Jev about. Returns `null` when the
+ * Builds the state `comment-triage` asks the provider about. Returns `null` when the
  * issue or the specific comment can't be found (e.g. deleted between the
  * event firing and the handler running) — the event payload's `bodySnippet`
  * is truncated to 120 chars, so the comment is always re-fetched in full here
@@ -313,7 +313,7 @@ async function triageComment(
 }
 
 /**
- * Builds the state `run-outcome-qa` asks Jev about. The run lifecycle event
+ * Builds the state `run-outcome-qa` asks the provider about. The run lifecycle event
  * payload carries no comment/description text (just run metadata), so the
  * issue and its comments are always re-fetched here. The "final comment" is
  * the run's own last comment, matched by `createdByRunId` — never inferred
@@ -383,13 +383,13 @@ async function handleRunLifecycleEvent(ctx: PluginContext, event: PluginEvent): 
 
   const acquired = await acquireLease(ctx.state, `run-outcome-qa:${event.eventId}`);
   if (!acquired) {
-    ctx.logger.debug("jev.run-outcome-qa.event.duplicate", { eventId: event.eventId });
+    ctx.logger.debug("verdict.run-outcome-qa.event.duplicate", { eventId: event.eventId });
     return;
   }
   try {
     await triageRunOutcome(ctx, event.companyId, issueId, runId, runStatus);
   } catch (error) {
-    ctx.logger.error("jev.run-outcome-qa.run-failed", {
+    ctx.logger.error("verdict.run-outcome-qa.run-failed", {
       issueId,
       runId,
       error: error instanceof Error ? error.message : String(error),
@@ -401,7 +401,7 @@ async function handleRunLifecycleEvent(ctx: PluginContext, event: PluginEvent): 
  * captures it here for `onApiRequest` (and any future out-of-band hook) to use. */
 let currentContext: PluginContext | undefined;
 
-function providerRuntime(ctx: PluginContext, config: JevConfig): ProviderRuntime {
+function providerRuntime(ctx: PluginContext, config: VerdictConfig): ProviderRuntime {
   return {
     resolveSecret: (ref) => ctx.secrets.resolve(ref as string | EnvSecretRefBinding),
     host: ctx,
@@ -412,17 +412,17 @@ function providerRuntime(ctx: PluginContext, config: JevConfig): ProviderRuntime
 
 /** One pipeline per call, over the provider chain `policyName` resolves to
  * (its `provider`, else `defaultProvider`, then its `fallbackProviders`). */
-function buildClient(ctx: PluginContext, config: JevConfig, policyName: string): DecisionPipeline {
+function buildClient(ctx: PluginContext, config: VerdictConfig, policyName: string): DecisionPipeline {
   return buildPolicyPipeline(config, policyName, providerRuntime(ctx, config), {
     dailyTokenBudget: config.dailyTokenBudget,
     redactionPatterns: config.redactionPatterns,
-    cache: jevCache,
+    cache: verdictCache,
     budgetStore: createPluginStateBudgetStore(ctx.state),
   });
 }
 
-async function loadConfig(ctx: PluginContext, companyId?: string): Promise<JevConfig> {
-  return parseJevConfig(await ctx.config.get(companyId));
+async function loadConfig(ctx: PluginContext, companyId?: string): Promise<VerdictConfig> {
+  return parseVerdictConfig(await ctx.config.get(companyId));
 }
 
 /** Query params the host parses as repeated keys arrive as `string[]` — API
@@ -441,27 +441,27 @@ function toolSchema(name: string) {
   return declaration.parametersSchema;
 }
 
-function toAskState(params: JevAskParams) {
+function toAskState(params: VerdictAskParams) {
   return { state: params.state, questions: params.questions as unknown as DecisionQuestions };
 }
 
-function toClassifyTaskState(params: JevClassifyTaskParams) {
+function toClassifyTaskState(params: VerdictClassifyTaskParams) {
   return { description: params.description, candidateSkills: params.candidateSkills ?? [] };
 }
 
-function toVerifyState(params: JevVerifyParams) {
+function toVerifyState(params: VerdictVerifyParams) {
   return { claim: params.claim, evidence: params.evidence };
 }
 
-function toRerankState(params: JevRerankParams) {
+function toRerankState(params: VerdictRerankParams) {
   return { query: params.query, candidates: params.candidates };
 }
 
-/** Shared by every `jev:*` tool handler and `tool-*` API route: resolves
+/** Shared by every `verdict:*` tool handler and `tool-*` API route: resolves
  * this company's config/client, runs `rawParams` through `runDecisionTool`,
  * and never throws — callers map the resulting `ToolOutcome` to a
  * `ToolResult` or `PluginApiResponse` themselves. */
-async function runJevTool<TParams, TState>(
+async function runVerdictTool<TParams, TState>(
   ctx: PluginContext,
   companyId: string,
   policy: Policy<TState>,
@@ -506,7 +506,7 @@ function requireCompanyId(params: Record<string, unknown>): string {
 
 /** Handles `POST /guard/evaluate` for the harness hooks. Body shape is
  * validated here (never trusted from the request) before anything else runs;
- * the rate limiter is consulted before the issue fetch / Jev call so a
+ * the rate limiter is consulted before the issue fetch / provider call so a
  * rate-limited caller never costs more than a map lookup and a bucket check. */
 async function handleGuardEvaluate(ctx: PluginContext, input: PluginApiRequestInput): Promise<PluginApiResponse> {
   const parsed = guardEvaluateRequestSchema.safeParse(input.body);
@@ -519,7 +519,7 @@ async function handleGuardEvaluate(ctx: PluginContext, input: PluginApiRequestIn
   const policyConfig = policyConfigFor(config, POLICY_FOR_HOOK[request.hookKind].name);
   const limiter = guardRateLimiterFor(input.companyId, config);
   if (!limiter.tryConsume(input.companyId, estimateRequestTokens(request.excerpt))) {
-    // Reuse the same fail-closed logic a Jev timeout/error would hit, so a
+    // Reuse the same fail-closed logic a provider timeout/error would hit, so a
     // caller can't bypass `enforce`-mode blocking by flooding the route past
     // the rate limit: a 429 carries the policy's fallback decision in its
     // body rather than leaving the hook client to default to "allow".
@@ -577,7 +577,7 @@ const PROVIDER_HEALTH_CACHE_MS = 60_000;
 // per-company config never bleeds into another company's cached result.
 const providerHealthCache = new Map<string, { at: number; health: ProviderHealth }>();
 
-function providerHealthCacheKey(config: JevConfig): string {
+function providerHealthCacheKey(config: VerdictConfig): string {
   const id = defaultProviderId(config);
   return JSON.stringify([id, effectiveProviders(config).providers[id]]);
 }
@@ -587,7 +587,7 @@ function providerHealthCacheKey(config: JevConfig): string {
  * default provider only. Cached for ~60s: `dashboard-summary` is read on
  * every widget render, and a live `listModels()` call on each one is wasted
  * load against the provider. */
-async function checkProviderHealth(ctx: PluginContext, config: JevConfig): Promise<ProviderHealth> {
+async function checkProviderHealth(ctx: PluginContext, config: VerdictConfig): Promise<ProviderHealth> {
   const id = defaultProviderId(config);
   const providerConfig = effectiveProviders(config).providers[id];
   if (!providerConfig) {
@@ -632,7 +632,7 @@ const plugin = definePlugin({
       if (!issueId) return;
       const acquired = await acquireLease(ctx.state, event.eventId);
       if (!acquired) {
-        ctx.logger.debug("jev.event.duplicate", { eventId: event.eventId });
+        ctx.logger.debug("verdict.event.duplicate", { eventId: event.eventId });
         return;
       }
       const config = await loadConfig(ctx, event.companyId);
@@ -654,7 +654,7 @@ const plugin = definePlugin({
           },
         );
       } catch (error) {
-        ctx.logger.error("jev.policy.run-failed", {
+        ctx.logger.error("verdict.policy.run-failed", {
           issueId,
           error: error instanceof Error ? error.message : String(error),
         });
@@ -666,13 +666,13 @@ const plugin = definePlugin({
       if (!issueId) return;
       const acquired = await acquireLease(ctx.state, `issue-triage:${event.eventId}`);
       if (!acquired) {
-        ctx.logger.debug("jev.issue-triage.event.duplicate", { eventId: event.eventId });
+        ctx.logger.debug("verdict.issue-triage.event.duplicate", { eventId: event.eventId });
         return;
       }
       try {
         await triageIssue(ctx, event.companyId, issueId);
       } catch (error) {
-        ctx.logger.error("jev.issue-triage.run-failed", {
+        ctx.logger.error("verdict.issue-triage.run-failed", {
           issueId,
           trigger: "issue.created",
           error: error instanceof Error ? error.message : String(error),
@@ -685,7 +685,7 @@ const plugin = definePlugin({
       if (!issueId) return;
       const acquired = await acquireLease(ctx.state, `issue-triage:${event.eventId}`);
       if (!acquired) {
-        ctx.logger.debug("jev.issue-triage.event.duplicate", { eventId: event.eventId });
+        ctx.logger.debug("verdict.issue-triage.event.duplicate", { eventId: event.eventId });
         return;
       }
       try {
@@ -701,7 +701,7 @@ const plugin = definePlugin({
         if (previous === fingerprint) return;
         await triageIssue(ctx, event.companyId, issueId);
       } catch (error) {
-        ctx.logger.error("jev.issue-triage.run-failed", {
+        ctx.logger.error("verdict.issue-triage.run-failed", {
           issueId,
           trigger: "issue.updated",
           error: error instanceof Error ? error.message : String(error),
@@ -719,7 +719,7 @@ const plugin = definePlugin({
       if (!issueId || !commentId) return;
       const acquired = await acquireLease(ctx.state, `comment-triage:${event.eventId}`);
       if (!acquired) {
-        ctx.logger.debug("jev.comment-triage.event.duplicate", { eventId: event.eventId });
+        ctx.logger.debug("verdict.comment-triage.event.duplicate", { eventId: event.eventId });
         return;
       }
       try {
@@ -735,7 +735,7 @@ const plugin = definePlugin({
           });
         }
       } catch (error) {
-        ctx.logger.error("jev.comment-triage.run-failed", {
+        ctx.logger.error("verdict.comment-triage.run-failed", {
           issueId,
           commentId,
           error: error instanceof Error ? error.message : String(error),
@@ -780,10 +780,10 @@ const plugin = definePlugin({
             await triageIssue(ctx, company.id, issue.id, { runId: job.runId });
           } catch (error) {
             if (error instanceof BudgetExceededError) {
-              ctx.logger.info("jev.job.issue-triage-backlog-sweep.budget-exhausted", { companyId: company.id });
+              ctx.logger.info("verdict.job.issue-triage-backlog-sweep.budget-exhausted", { companyId: company.id });
               break;
             }
-            ctx.logger.error("jev.job.issue-triage-backlog-sweep.failed", {
+            ctx.logger.error("verdict.job.issue-triage-backlog-sweep.failed", {
               companyId: company.id,
               issueId: issue.id,
               error: error instanceof Error ? error.message : String(error),
@@ -883,13 +883,13 @@ const plugin = definePlugin({
     });
 
     ctx.jobs.register("daily-budget-report", async (job) => {
-      ctx.logger.info("jev.job.daily-budget-report", { runId: job.runId, scheduledAt: job.scheduledAt });
+      ctx.logger.info("verdict.job.daily-budget-report", { runId: job.runId, scheduledAt: job.scheduledAt });
     });
 
     ctx.tools.register(
-      "jev-ping",
+      "verdict-ping",
       {
-        displayName: "Jev Ping",
+        displayName: "Verdict Ping",
         description:
           "Exercises the reference `ping` policy end-to-end against TypeSafe and records a decision in the ledger.",
         parametersSchema: {
@@ -924,14 +924,14 @@ const plugin = definePlugin({
     );
 
     ctx.tools.register(
-      "jev-ask",
+      "verdict-ask",
       {
-        displayName: "Jev Ask",
-        description: "Generic noul/choice/score question-asking tool for TypeSafe's Jev decision model.",
-        parametersSchema: toolSchema("jev-ask"),
+        displayName: "Verdict Ask",
+        description: "Generic noul/choice/score question-asking tool for the configured decision model.",
+        parametersSchema: toolSchema("verdict-ask"),
       },
       async (params, runCtx) => {
-        const outcome = await runJevTool(ctx, runCtx.companyId, policies.ask, jevAskParamsSchema, toAskState, params, {
+        const outcome = await runVerdictTool(ctx, runCtx.companyId, policies.ask, verdictAskParamsSchema, toAskState, params, {
           runId: runCtx.runId,
           agentId: runCtx.agentId,
         });
@@ -940,18 +940,18 @@ const plugin = definePlugin({
     );
 
     ctx.tools.register(
-      "jev-classify-task",
+      "verdict-classify-task",
       {
-        displayName: "Jev Classify Task",
+        displayName: "Verdict Classify Task",
         description: "Classifies a unit of work by kind, model tier, and review depth.",
-        parametersSchema: toolSchema("jev-classify-task"),
+        parametersSchema: toolSchema("verdict-classify-task"),
       },
       async (params, runCtx) => {
-        const outcome = await runJevTool(
+        const outcome = await runVerdictTool(
           ctx,
           runCtx.companyId,
           policies["classify-task"],
-          jevClassifyTaskParamsSchema,
+          verdictClassifyTaskParamsSchema,
           toClassifyTaskState,
           params,
           { runId: runCtx.runId, agentId: runCtx.agentId },
@@ -961,18 +961,18 @@ const plugin = definePlugin({
     );
 
     ctx.tools.register(
-      "jev-verify",
+      "verdict-verify",
       {
-        displayName: "Jev Verify",
+        displayName: "Verdict Verify",
         description: "Checks whether evidence supports, contradicts, or says nothing about a claim.",
-        parametersSchema: toolSchema("jev-verify"),
+        parametersSchema: toolSchema("verdict-verify"),
       },
       async (params, runCtx) => {
-        const outcome = await runJevTool(
+        const outcome = await runVerdictTool(
           ctx,
           runCtx.companyId,
           policies.verify,
-          jevVerifyParamsSchema,
+          verdictVerifyParamsSchema,
           toVerifyState,
           params,
           { runId: runCtx.runId, agentId: runCtx.agentId },
@@ -982,18 +982,18 @@ const plugin = definePlugin({
     );
 
     ctx.tools.register(
-      "jev-rerank",
+      "verdict-rerank",
       {
-        displayName: "Jev Rerank",
+        displayName: "Verdict Rerank",
         description: "Scores candidates against a query for relevance, answer-containment, and injection risk.",
-        parametersSchema: toolSchema("jev-rerank"),
+        parametersSchema: toolSchema("verdict-rerank"),
       },
       async (params, runCtx) => {
-        const outcome = await runJevTool(
+        const outcome = await runVerdictTool(
           ctx,
           runCtx.companyId,
           policies.rerank,
-          jevRerankParamsSchema,
+          verdictRerankParamsSchema,
           toRerankState,
           params,
           { runId: runCtx.runId, agentId: runCtx.agentId },
@@ -1003,9 +1003,9 @@ const plugin = definePlugin({
     );
 
     ctx.tools.register(
-      "jev-decide-browser-action",
+      "verdict-decide-browser-action",
       {
-        displayName: "Jev Decide Browser Action",
+        displayName: "Verdict Decide Browser Action",
         description:
           "Given a goal, a page URL, and an indexed element table, returns one advisory action from a closed " +
           "space plus the target element index. Never performs the action.",
@@ -1049,7 +1049,7 @@ const plugin = definePlugin({
                 payload: {
                   version: 1,
                   prompt:
-                    `Jev recommends "${input.action}" on ${input.url} for goal "${input.goal}". This may involve ` +
+                    `Verdict recommends "${input.action}" on ${input.url} for goal "${input.goal}". This may involve ` +
                     "payment, credentials, or a destructive change — confirm before the harness proceeds.",
                   acceptLabel: "Allow",
                   rejectLabel: "Block",
@@ -1098,7 +1098,7 @@ const plugin = definePlugin({
   },
 
   async onValidateConfig(rawConfig: Record<string, unknown>): Promise<PluginConfigValidationResult> {
-    const parsed = parseJevConfig(rawConfig);
+    const parsed = parseVerdictConfig(rawConfig);
     const ctx = currentContext;
     const report = validateProviderConfig(parsed, ctx);
     if (report.errors.length > 0) {
@@ -1115,7 +1115,7 @@ const plugin = definePlugin({
     if (!providerConfig.apiKeyRef && providerConfig.authStyle !== "none") {
       return withWarnings([
         "No TypeSafe API key bound yet. Create a key at console.typesafe.ai, add it to the vault, and bind it " +
-          "to apiKeyRef before Jev can make live calls.",
+          "to apiKeyRef before Verdict can make live calls.",
       ]);
     }
     if (!ctx) {
@@ -1170,7 +1170,7 @@ const plugin = definePlugin({
           body: await getPolicyAggregate(ctx.db, input.companyId, input.params.policy),
         };
       case "tool-ask": {
-        const outcome = await runJevTool(ctx, input.companyId, policies.ask, jevAskParamsSchema, toAskState, input.body, {
+        const outcome = await runVerdictTool(ctx, input.companyId, policies.ask, verdictAskParamsSchema, toAskState, input.body, {
           runId: input.actor.runId,
           agentId: input.actor.agentId,
         });
@@ -1179,11 +1179,11 @@ const plugin = definePlugin({
           : { status: statusForToolError(outcome.error), body: { error: outcome.error } };
       }
       case "tool-classify-task": {
-        const outcome = await runJevTool(
+        const outcome = await runVerdictTool(
           ctx,
           input.companyId,
           policies["classify-task"],
-          jevClassifyTaskParamsSchema,
+          verdictClassifyTaskParamsSchema,
           toClassifyTaskState,
           input.body,
           { runId: input.actor.runId, agentId: input.actor.agentId },
@@ -1193,11 +1193,11 @@ const plugin = definePlugin({
           : { status: statusForToolError(outcome.error), body: { error: outcome.error } };
       }
       case "tool-verify": {
-        const outcome = await runJevTool(
+        const outcome = await runVerdictTool(
           ctx,
           input.companyId,
           policies.verify,
-          jevVerifyParamsSchema,
+          verdictVerifyParamsSchema,
           toVerifyState,
           input.body,
           { runId: input.actor.runId, agentId: input.actor.agentId },
@@ -1207,11 +1207,11 @@ const plugin = definePlugin({
           : { status: statusForToolError(outcome.error), body: { error: outcome.error } };
       }
       case "tool-rerank": {
-        const outcome = await runJevTool(
+        const outcome = await runVerdictTool(
           ctx,
           input.companyId,
           policies.rerank,
-          jevRerankParamsSchema,
+          verdictRerankParamsSchema,
           toRerankState,
           input.body,
           { runId: input.actor.runId, agentId: input.actor.agentId },
