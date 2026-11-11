@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import type { Issue, IssueComment } from "@paperclipai/shared";
@@ -100,6 +104,19 @@ describe("plugin scaffold", () => {
     expect(manifest.capabilities).toContain("issues.wakeup");
     expect(manifest.capabilities).toContain("issue.comments.read");
     expect(manifest.capabilities).toContain("issue.comments.create");
+  });
+
+  it("migrations only reference the schema the host derives from the plugin id and namespace slug", () => {
+    // Mirrors core's derivePluginDatabaseNamespace: plugin_<slug>_<sha256(id)[0..10]>.
+    const hash = createHash("sha256").update(manifest.id).digest("hex").slice(0, 10);
+    const namespace = `plugin_${manifest.database?.namespaceSlug}_${hash}`;
+    expect(namespace).toBe("plugin_verdict_acf66b4489");
+
+    const dir = join(dirname(fileURLToPath(import.meta.url)), "..", manifest.database!.migrationsDir);
+    for (const file of readdirSync(dir).filter((name) => name.endsWith(".sql"))) {
+      const schemas = new Set(readFileSync(join(dir, file), "utf8").match(/\bplugin_[a-z0-9_]+(?=\.)/g) ?? []);
+      expect([...schemas], file).toEqual([namespace]);
+    }
   });
 
   it("registers data + actions", async () => {

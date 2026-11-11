@@ -205,7 +205,7 @@ const manifest: PaperclipPluginManifestV1 = {
     },
   },
   database: {
-    namespaceSlug: "jev",
+    namespaceSlug: "verdict",
     migrationsDir: "migrations",
     coreReadTables: ["issues"],
   },
