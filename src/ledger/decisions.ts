@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PolicyMode } from "../config.js";
+import type { ProviderKind } from "../decision/provider.js";
 import { type LedgerDb, tableName } from "./db.js";
 
 export type DecisionOutcome = "observed" | "suggested" | "applied" | "skipped" | "blocked" | "error";
@@ -26,6 +27,13 @@ export interface BeginDecisionInput {
   /** Set by JevGuard's Pre/Post hooks (see `src/guard/evaluate.ts`); absent
    * for every other policy and for `Stop` (no single tool applies). */
   toolName?: string | null;
+  /** The provider the call is about to go to. `completeDecision` overwrites
+   * it when a fallback answered instead. Defaults to the legacy `typesafe`. */
+  provider?: string;
+  providerKind?: ProviderKind;
+  /** Joins a primary decision with its shadow-provider decisions. Defaults
+   * to the row's own id. */
+  decisionGroupId?: string;
 }
 
 export interface CompleteDecisionInput {
@@ -35,9 +43,19 @@ export interface CompleteDecisionInput {
   margin?: number | null;
   latencyMs: number;
   usage: DecisionUsage;
-  costUsd: number;
+  /** `null` for host-billed providers. */
+  costUsd: number | null;
   outcome: DecisionOutcome;
   reason?: string | null;
+  /** The provider that actually answered, when known; left unchanged otherwise. */
+  provider?: string;
+  providerKind?: ProviderKind;
+  model?: string;
+  rateVersion?: string | null;
+  hostInvocationId?: string | null;
+  /** Set when the answering provider's binding forced a different mode than
+   * the one recorded at `beginDecision` time. */
+  mode?: PolicyMode;
 }
 
 export interface DecisionRow {
@@ -56,11 +74,16 @@ export interface DecisionRow {
   margin: number | null;
   latencyMs: number | null;
   usage: DecisionUsage;
-  costUsd: number;
+  costUsd: number | null;
   mode: PolicyMode;
   outcome: DecisionOutcome;
   reason: string | null;
   toolName: string | null;
+  provider: string;
+  providerKind: ProviderKind;
+  rateVersion: string | null;
+  hostInvocationId: string | null;
+  decisionGroupId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -81,11 +104,16 @@ interface DecisionDbRow {
   margin: number | null;
   latency_ms: number | null;
   usage: DecisionUsage;
-  cost_usd: string | number;
+  cost_usd: string | number | null;
   mode: PolicyMode;
   outcome: DecisionOutcome;
   reason: string | null;
   tool_name: string | null;
+  provider?: string;
+  provider_kind?: ProviderKind;
+  rate_version?: string | null;
+  host_invocation_id?: string | null;
+  decision_group_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -112,6 +140,11 @@ function fromDbRow(row: DecisionDbRow): DecisionRow {
     outcome: row.outcome,
     reason: row.reason,
     toolName: row.tool_name,
+    provider: row.provider ?? "typesafe",
+    providerKind: row.provider_kind ?? "systemone",
+    rateVersion: row.rate_version ?? null,
+    hostInvocationId: row.host_invocation_id ?? null,
+    decisionGroupId: row.decision_group_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -127,8 +160,9 @@ export async function beginDecision(db: LedgerDb, input: BeginDecisionInput): Pr
   const id = input.id ?? randomUUID();
   await db.execute(
     `INSERT INTO ${tableName(db, "jev_decisions")}
-       (id, company_id, issue_id, run_id, agent_id, policy, policy_version, question_version, model, state_hash, mode, outcome, tool_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'observed', $12)`,
+       (id, company_id, issue_id, run_id, agent_id, policy, policy_version, question_version, model, state_hash, mode, outcome, tool_name,
+        provider, provider_kind, decision_group_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'observed', $12, $13, $14, $15)`,
     [
       id,
       input.companyId,
@@ -142,6 +176,9 @@ export async function beginDecision(db: LedgerDb, input: BeginDecisionInput): Pr
       input.stateHash ?? "",
       input.mode,
       input.toolName ?? null,
+      input.provider ?? "typesafe",
+      input.providerKind ?? "systemone",
+      input.decisionGroupId ?? id,
     ],
   );
   return id;
@@ -159,6 +196,12 @@ export async function completeDecision(db: LedgerDb, id: string, patch: Complete
          cost_usd = $8,
          outcome = $9,
          reason = $10,
+         provider = coalesce($11, provider),
+         provider_kind = coalesce($12, provider_kind),
+         model = coalesce($13, model),
+         rate_version = $14,
+         host_invocation_id = $15,
+         mode = coalesce($16, mode),
          updated_at = now()
      WHERE id = $1`,
     [
@@ -172,6 +215,12 @@ export async function completeDecision(db: LedgerDb, id: string, patch: Complete
       patch.costUsd,
       patch.outcome,
       patch.reason ?? null,
+      patch.provider ?? null,
+      patch.providerKind ?? null,
+      patch.model ?? null,
+      patch.rateVersion ?? null,
+      patch.hostInvocationId ?? null,
+      patch.mode ?? null,
     ],
   );
 }

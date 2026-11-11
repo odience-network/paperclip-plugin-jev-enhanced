@@ -1,7 +1,8 @@
 import { z } from "zod";
-import type { JevClient } from "../jev/client.js";
-import { classifyError } from "../jev/errors.js";
-import { canonicalize, sha256Hex } from "../jev/canonical.js";
+import { answeredByFields, type DecisionPipeline } from "../decision/pipeline.js";
+import { providerBinding } from "../decision/registry.js";
+import { classifyError } from "../decision/errors.js";
+import { canonicalize, sha256Hex } from "../decision/canonical.js";
 import { beginDecision, completeDecision, type DecisionOutcome, type LedgerDb } from "../ledger/index.js";
 import { policyConfigFor, type JevConfig } from "../config.js";
 import {
@@ -67,7 +68,7 @@ export interface ExistingConfirmation {
 }
 
 export interface DecideBrowserActionDeps {
-  client: JevClient;
+  client: DecisionPipeline;
   db: LedgerDb;
   config: JevConfig;
   companyId: string;
@@ -166,7 +167,8 @@ export async function decideBrowserAction(
   }
   const input = parsed.data;
 
-  const policyConfig = policyConfigFor(deps.config, browserActionPolicy.name);
+  const primary = deps.client.primary;
+  const policyConfig = policyConfigFor(deps.config, browserActionPolicy.name, providerBinding(primary));
   if (!policyConfig.enabled) {
     return { outcome: "skipped", reason: "policy-disabled" };
   }
@@ -197,8 +199,6 @@ export async function decideBrowserAction(
     return { outcome: "skipped", reason: "pre-filter" };
   }
 
-  const isShadow = policyConfig.mode === "shadow";
-
   const decisionId = await beginDecision(deps.db, {
     companyId: deps.companyId,
     issueId: input.issueId,
@@ -207,8 +207,10 @@ export async function decideBrowserAction(
     policy: browserActionPolicy.name,
     policyVersion: browserActionPolicy.version,
     questionVersion: browserActionPolicy.questionVersion,
-    model: deps.client.resolvedModel,
+    model: primary.model,
     mode: policyConfig.mode,
+    provider: primary.id,
+    providerKind: primary.kind,
   });
 
   const stateHash = sha256Hex(canonicalize(state));
@@ -248,11 +250,18 @@ export async function decideBrowserAction(
       state,
       questions,
     });
+    // A fallback provider answers under its own thresholds and mode.
+    const answeredConfig =
+      askOutcome.provider === primary
+        ? policyConfig
+        : policyConfigFor(deps.config, browserActionPolicy.name, providerBinding(askOutcome.provider));
+    const answeredCtx: PolicyContext = answeredConfig === policyConfig ? ctx : { ...ctx, config: answeredConfig };
+    const isShadow = answeredConfig.mode === "shadow";
     const answers = askOutcome.result.answers;
-    const verdict = browserActionPolicy.decide(answers, ctx);
+    const verdict = browserActionPolicy.decide(answers, answeredCtx);
 
-    const sensitivityThreshold = ctx.config.thresholds.sensitivity ?? 0.5;
-    const targetThreshold = ctx.config.thresholds.target ?? 0.5;
+    const sensitivityThreshold = answeredCtx.config.thresholds.sensitivity ?? 0.5;
+    const targetThreshold = answeredCtx.config.thresholds.target ?? 0.5;
     const sensitive = resolveSensitive(answers, sensitivityThreshold);
     const targetIndex = resolveTargetIndex(answers, targetThreshold);
     // What Jev actually picked, independent of any gate below — always
@@ -329,7 +338,7 @@ export async function decideBrowserAction(
       ? "observed"
       : verdict.verdict === "blocked" && action === "blocked"
         ? "blocked"
-        : mapMode(policyConfig.mode);
+        : mapMode(answeredConfig.mode);
 
     await completeDecision(deps.db, decisionId, {
       stateHash: askOutcome.stateHash,
@@ -341,6 +350,8 @@ export async function decideBrowserAction(
       costUsd: askOutcome.costUsd,
       outcome,
       reason,
+      ...answeredByFields(askOutcome),
+      ...(answeredConfig.mode !== policyConfig.mode ? { mode: answeredConfig.mode } : {}),
     });
 
     // Confirmation-card creation happens strictly after the ledger write,

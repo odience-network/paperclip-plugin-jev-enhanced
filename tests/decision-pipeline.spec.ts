@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { JevClient, JevValidationError } from "../src/jev/client.js";
-import { BudgetExceededError, createInMemoryBudgetStore } from "../src/jev/budget.js";
-import { createInMemoryJevCache } from "../src/jev/cache.js";
+import { createTypesafePipeline } from "../src/decision/registry.js";
+import { JevValidationError } from "../src/decision/errors.js";
+import { BudgetExceededError, createInMemoryBudgetStore } from "../src/decision/budget.js";
+import { createInMemoryJevCache } from "../src/decision/cache.js";
 import type { Fetch } from "@typesafe-ai/sdk";
 
 const PING_QUESTIONS = { pong: { type: "noul" as const, instructions: "Is this a ping?" } };
@@ -22,10 +23,10 @@ function fakeSuccessResult(overrides: Partial<{ model: string }> = {}) {
   };
 }
 
-describe("JevClient", () => {
+describe("DecisionPipeline over the typesafe provider", () => {
   it("validates and returns a well-formed response", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(fakeSuccessResult()));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
 
     const outcome = await client.ask({
       policy: "ping",
@@ -41,7 +42,7 @@ describe("JevClient", () => {
 
   it("rejects a response whose model echo does not match the requested model", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(fakeSuccessResult({ model: "some-other-model" })));
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl, model: "jev-1.13.0" });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl, model: "jev-1.13.0" });
 
     await expect(
       client.ask({ policy: "ping", companyId: "company_1", state: "hello", questions: PING_QUESTIONS }),
@@ -58,7 +59,7 @@ describe("JevClient", () => {
         usage: { input_tokens: 10, output_tokens: 5 },
       }),
     );
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
 
     await expect(
       client.ask({ policy: "ping", companyId: "company_1", state: "hello", questions: PING_QUESTIONS }),
@@ -72,7 +73,7 @@ describe("JevClient", () => {
         jsonResponse({ error: { message: "slow down" } }, { status: 429, headers: { "retry-after": "0" } }),
       )
       .mockResolvedValueOnce(jsonResponse(fakeSuccessResult()));
-    const client = new JevClient({
+    const client = createTypesafePipeline({
       resolveApiKey: async () => "test-key",
       fetchImpl,
       retry: { maxRetries: 1, backoffInitialMs: 1, backoffMaxMs: 1 },
@@ -92,7 +93,7 @@ describe("JevClient", () => {
   it("serves a repeated ask from cache without calling the provider again", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(fakeSuccessResult()));
     const cache = createInMemoryJevCache();
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl, cache });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl, cache });
     const input = { policy: "ping", companyId: "company_1", state: "hello", questions: PING_QUESTIONS };
 
     const first = await client.ask(input);
@@ -109,7 +110,7 @@ describe("JevClient", () => {
       sentBody = JSON.parse(String(init?.body));
       return jsonResponse(fakeSuccessResult());
     });
-    const client = new JevClient({
+    const client = createTypesafePipeline({
       resolveApiKey: async () => "test-key",
       fetchImpl,
       redactionPatterns: ["secret-\\d+"],
@@ -129,7 +130,7 @@ describe("JevClient", () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(fakeSuccessResult()));
     const budgetStore = createInMemoryBudgetStore();
     await budgetStore.add("company_1", new Date().toISOString().slice(0, 10), { tokens: 10, costUsd: 0.01 });
-    const client = new JevClient({
+    const client = createTypesafePipeline({
       resolveApiKey: async () => "test-key",
       fetchImpl,
       budgetStore,

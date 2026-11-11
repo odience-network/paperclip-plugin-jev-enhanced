@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
-import { DEFAULT_JEV_MODEL } from "./jev/models.js";
+import { DEFAULT_JEV_MODEL } from "./decision/models.js";
 
 // Deliberately not `new URL("../skills/...", import.meta.url)`: Vite special-
 // cases that exact literal pattern as a static asset reference and rewrites

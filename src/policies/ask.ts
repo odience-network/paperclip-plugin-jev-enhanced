@@ -1,4 +1,4 @@
-import type { Questions } from "@typesafe-ai/sdk";
+import type { DecisionQuestions } from "../decision/types.js";
 import type { FieldDecision, Policy, PolicyVerdict } from "./types.js";
 import { confidenceMarginFor } from "./util.js";
 
@@ -13,7 +13,7 @@ import { confidenceMarginFor } from "./util.js";
  */
 export interface AskState {
   state: unknown;
-  questions: Questions;
+  questions: DecisionQuestions;
 }
 
 export const askPolicy: Policy<AskState> = {
@@ -30,7 +30,7 @@ export const askPolicy: Policy<AskState> = {
     return Object.keys(state.questions).length > 0;
   },
 
-  questions(state): Questions {
+  questions(state): DecisionQuestions {
     return state.questions;
   },
 

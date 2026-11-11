@@ -13,7 +13,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { JevAnswer } from "../src/jev/types.js";
+import type { JevAnswer } from "../src/decision/types.js";
 import type { RunOutcomeQaState, RunOutcomeQaRunStatus } from "../src/policies/run-outcome-qa.js";
 import type { EvalCase } from "./types.js";
 

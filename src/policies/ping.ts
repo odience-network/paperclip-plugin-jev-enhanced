@@ -1,5 +1,5 @@
 import { noul } from "@typesafe-ai/sdk";
-import type { JevAnswer } from "../jev/types.js";
+import type { JevAnswer } from "../decision/types.js";
 import type { Policy, PolicyContext, PolicyVerdict } from "./types.js";
 
 /**

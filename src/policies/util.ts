@@ -1,4 +1,4 @@
-import type { JevAnswer } from "../jev/types.js";
+import type { JevAnswer } from "../decision/types.js";
 
 /** Collapses any `JevAnswer` shape to a single `{confidence, margin}` pair so
  * `decide()` implementations can gate on the same two numbers regardless of

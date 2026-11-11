@@ -1,11 +1,12 @@
-import type { JevClient } from "../jev/client.js";
-import type { JevAnswer } from "../jev/types.js";
-import { classifyError } from "../jev/errors.js";
+import { answeredByFields, type DecisionPipeline } from "../decision/pipeline.js";
+import type { JevAnswer } from "../decision/types.js";
+import { CapabilityError, classifyError } from "../decision/errors.js";
+import { providerBinding } from "../decision/registry.js";
 import { beginDecision, completeDecision, type DecisionOutcome, type LedgerDb } from "../ledger/index.js";
 import { policyConfigFor, type JevConfig, type PolicyMode } from "../config.js";
 import { applyDecision, type ApplyDeps } from "../apply/index.js";
 import { postSuggestion, type SuggestDeps } from "../suggest/index.js";
-import { hashState } from "../jev/redact.js";
+import { hashState } from "../decision/redact.js";
 import type { Policy, PolicyContext, PolicyVerdict } from "./types.js";
 
 export interface RunPolicyInput<TState> {
@@ -23,7 +24,7 @@ export interface RunPolicyInput<TState> {
 }
 
 export interface RunPolicyDeps {
-  client: JevClient;
+  client: DecisionPipeline;
   db: LedgerDb;
   apply: ApplyDeps;
   suggest: SuggestDeps;
@@ -47,16 +48,23 @@ function outcomeForMode(mode: PolicyMode): DecisionOutcome {
 }
 
 /**
- * Orchestrates one policy evaluation end to end: resolves company config,
- * writes the audit row *before* the provider call, calls Jev, decides, then
- * completes the audit row with the real outcome — and only runs `src/apply/`
- * side effects when the policy's mode is `enforce`.
+ * Orchestrates one policy evaluation end to end: resolves company config
+ * (thresholds and mode bound to the policy's primary provider), writes the
+ * audit row *before* the provider call, calls the provider chain, decides,
+ * then completes the audit row with the real outcome — and only runs
+ * `src/apply/` side effects when the policy's effective mode is `enforce`.
+ *
+ * If a fallback provider answered, config is re-resolved for it, so a
+ * fallback that isn't calibrated for this policy can only ever observe. If no
+ * provider in the chain can take the question set, the row is `skipped` with
+ * the capability reason code instead of `error`.
  */
 export async function runPolicy<TState>(
   input: RunPolicyInput<TState>,
   deps: RunPolicyDeps,
 ): Promise<RunPolicyResult> {
-  const policyConfig = policyConfigFor(input.config, input.policy.name);
+  const primary = deps.client.primary;
+  const policyConfig = policyConfigFor(input.config, input.policy.name, providerBinding(primary));
   const ctx: PolicyContext = {
     companyId: input.companyId,
     issueId: input.issueId ?? null,
@@ -87,8 +95,10 @@ export async function runPolicy<TState>(
     policy: input.policy.name,
     policyVersion: input.policy.version,
     questionVersion: input.policy.questionVersion,
-    model: deps.client.resolvedModel,
+    model: primary.model,
     mode: policyConfig.mode,
+    provider: primary.id,
+    providerKind: primary.kind,
   });
 
   try {
@@ -99,9 +109,14 @@ export async function runPolicy<TState>(
       state: input.state,
       questions,
     });
+    const answeredBy = askOutcome.provider;
+    const answeredConfig =
+      answeredBy === primary ? policyConfig : policyConfigFor(input.config, input.policy.name, providerBinding(answeredBy));
+    const answeredCtx: PolicyContext =
+      answeredConfig === policyConfig ? ctx : { ...ctx, config: answeredConfig, alwaysAuto: answeredConfig.alwaysAuto };
     const answers = askOutcome.result.answers as Record<string, JevAnswer>;
-    const verdict = input.policy.decide(answers, ctx, input.state);
-    const outcome = outcomeForMode(policyConfig.mode);
+    const verdict = input.policy.decide(answers, answeredCtx, input.state);
+    const outcome = outcomeForMode(answeredConfig.mode);
 
     await completeDecision(deps.db, decisionId, {
       // The ledger persists the *identity* hash (`ctx.stateHash`), not
@@ -118,16 +133,19 @@ export async function runPolicy<TState>(
       costUsd: askOutcome.costUsd,
       outcome,
       reason: verdict.reason,
+      ...answeredByFields(askOutcome),
+      ...(answeredConfig.mode !== policyConfig.mode ? { mode: answeredConfig.mode } : {}),
     });
 
     if (outcome === "applied") {
-      await applyDecision({ policy: input.policy.name, verdict, ctx, state: input.state }, deps.apply);
+      await applyDecision({ policy: input.policy.name, verdict, ctx: answeredCtx, state: input.state }, deps.apply);
     } else if (outcome === "suggested") {
-      await postSuggestion({ policy: input.policy.name, verdict, ctx }, deps.suggest);
+      await postSuggestion({ policy: input.policy.name, verdict, ctx: answeredCtx }, deps.suggest);
     }
 
     return { outcome, decisionId, verdict, cached: askOutcome.cached };
   } catch (error) {
+    const skipped = error instanceof CapabilityError;
     await completeDecision(deps.db, decisionId, {
       stateHash: "",
       answers: {},
@@ -136,9 +154,10 @@ export async function runPolicy<TState>(
       latencyMs: 0,
       usage: { input_tokens: 0, output_tokens: 0 },
       costUsd: 0,
-      outcome: "error",
+      outcome: skipped ? "skipped" : "error",
       reason: classifyError(error),
     });
+    if (skipped) return { outcome: "skipped", reason: error.reason };
     throw error;
   }
 }

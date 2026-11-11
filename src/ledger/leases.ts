@@ -1,5 +1,5 @@
 /** Minimal shape of `ctx.state` leases depend on, mirroring `PluginStateLike`
- * in `src/jev/budget.ts` so this module doesn't need to import SDK types. */
+ * in `src/decision/budget.ts` so this module doesn't need to import SDK types. */
 export interface LeaseState {
   get(input: { scopeKind: "instance"; namespace: string; stateKey: string }): Promise<unknown>;
   set(input: { scopeKind: "instance"; namespace: string; stateKey: string }, value: unknown): Promise<void>;

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Fetch } from "@typesafe-ai/sdk";
-import { JevClient } from "../src/jev/client.js";
+import { createTypesafePipeline } from "../src/decision/registry.js";
 import { pingPolicy } from "../src/policies/ping.js";
 import { runPolicy } from "../src/policies/run.js";
 import { jevConfigSchema, type JevConfig } from "../src/config.js";
@@ -81,7 +81,7 @@ describe("runPolicy", () => {
         usage: { input_tokens: 10, output_tokens: 5 },
       }),
     );
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
     const db = createFakeDb();
     const applyLog = vi.fn();
 
@@ -105,7 +105,7 @@ describe("runPolicy", () => {
     const fetchImpl = vi.fn<Fetch>(async () =>
       jsonResponse({ model: "jev-1.13.0", answers: {}, usage: { input_tokens: 0, output_tokens: 0 } }),
     );
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
     const db = createFakeDb();
 
     const result = await runPolicy(
@@ -133,7 +133,7 @@ describe("runPolicy", () => {
         usage: { input_tokens: 10, output_tokens: 5 },
       }),
     );
-    const client = new JevClient({ resolveApiKey: async () => "test-key", fetchImpl });
+    const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl });
     const db = createFakeDb();
     const applyLog = vi.fn();
 
@@ -156,7 +156,7 @@ describe("runPolicy", () => {
 
   it("records outcome 'error' and rethrows when the provider call fails", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse({ error: "boom" }, { status: 500 }));
-    const client = new JevClient({
+    const client = createTypesafePipeline({
       resolveApiKey: async () => "test-key",
       fetchImpl,
       retry: { maxRetries: 0 },

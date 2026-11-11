@@ -14,7 +14,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { JevAnswer } from "../src/jev/types.js";
+import type { JevAnswer } from "../src/decision/types.js";
 import type { CommentTriageState } from "../src/policies/comment-triage.js";
 import type { EvalCase } from "./types.js";
 

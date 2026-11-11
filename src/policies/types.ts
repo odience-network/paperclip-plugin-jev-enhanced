@@ -1,5 +1,4 @@
-import type { Questions } from "@typesafe-ai/sdk";
-import type { JevAnswer } from "../jev/types.js";
+import type { DecisionQuestions, JevAnswer } from "../decision/types.js";
 import type { PolicyConfig, PolicyMode } from "../config.js";
 
 export interface PolicyContext {
@@ -80,7 +79,7 @@ export interface Policy<TState = unknown> {
    * still re-trigger a decision. Defaults to hashing the full state when a
    * policy doesn't define this. */
   identityState?(state: TState): unknown;
-  questions(state: TState, ctx: PolicyContext): Questions;
+  questions(state: TState, ctx: PolicyContext): DecisionQuestions;
   /** `state` is the same value passed to `questions`/`preFilter`, threaded
    * through so a multi-question policy can gate on candidate-set size (e.g.
    * "state size < C") without the framework needing a dedicated field for

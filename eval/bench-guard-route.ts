@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import type { Fetch } from "@typesafe-ai/sdk";
 import { jevConfigSchema } from "../src/config.js";
-import { JevClient } from "../src/jev/client.js";
+import { createTypesafePipeline } from "../src/decision/registry.js";
 import type { LedgerDb } from "../src/ledger/db.js";
 import type { LoopGuardState } from "../src/guard/loopGuard.js";
 import type { InteractionsReader } from "../src/guard/rails.js";
@@ -86,7 +86,7 @@ async function benchHook(hookKind: GuardHookKind, iterations: number): Promise<B
       { status: 200, headers: { "content-type": "application/json" } },
     )) as Fetch;
 
-  const client = new JevClient({
+  const client = createTypesafePipeline({
     resolveApiKey: async () => "bench-key",
     fetchImpl,
     retry: { maxRetries: 0 },

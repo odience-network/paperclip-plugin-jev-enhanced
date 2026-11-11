@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { DEFAULT_JEV_MODEL } from "./jev/models.js";
 
 export const POLICY_MODES = ["shadow", "suggest", "enforce"] as const;
 export type PolicyMode = (typeof POLICY_MODES)[number];
@@ -45,10 +44,15 @@ const browserOriginSchema = z.string().transform((value, ctx) => {
   return url.origin;
 });
 
+/** A threshold value is either a policy-wide default (`confidenceMin: 0.7`)
+ * or a per-provider override block keyed `"<provider>/<model>"`
+ * (`"typesafe/jev-1.13.0": { confidenceMin: 0.75 }`). */
+const thresholdEntrySchema = z.union([z.number(), z.record(z.string(), z.number())]);
+
 const policyConfigSchema = z.object({
   enabled: z.boolean().default(true),
   mode: z.enum(POLICY_MODES).default("shadow"),
-  thresholds: z.record(z.string(), z.number()).default({}),
+  thresholds: z.record(z.string(), thresholdEntrySchema).default({}),
   /** Operator override: lets `enforce` mode overwrite a human-set field this
    * policy would otherwise respect. Never lets any policy write
    * `assigneeUserId` — that rule has no override. */
@@ -56,8 +60,16 @@ const policyConfigSchema = z.object({
   /** Free-form per-policy settings bag (e.g. `issue-triage`'s issue-type ->
    * label-id map) that don't belong in the shared schema above. */
   options: z.record(z.string(), z.unknown()).default({}),
+  /** Provider alias from `providers`; falls back to `defaultProvider`. */
+  provider: z.string().min(1).optional(),
+  /** Tried in order when the policy's provider fails or can't take the request. */
+  fallbackProviders: z.array(z.string().min(1)).optional(),
 });
-export type PolicyConfig = z.infer<typeof policyConfigSchema>;
+export type RawPolicyConfig = z.infer<typeof policyConfigSchema>;
+
+/** A policy's config as policies see it: thresholds already resolved for the
+ * provider that will answer, so `decide()` only ever reads plain numbers. */
+export type PolicyConfig = Omit<RawPolicyConfig, "thresholds"> & { thresholds: Record<string, number> };
 
 /** Tools JevGuard treats as read-only by default: skipped before any Jev call
  * (and before the loop guard / override-stamp rails even run), since they
@@ -125,10 +137,37 @@ const guardRailsConfigSchema = z.object({
 });
 export type GuardRailsConfig = z.infer<typeof guardRailsConfigSchema>;
 
+const providerIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/, "provider ids are lowercase letters, digits and dashes");
+
+/** `cloudflare` and `openai` adapters land in G3; until then the schema only
+ * admits the kinds this build can construct. */
+const providerConfigSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("systemone"),
+      preset: z.string().min(1).default("typesafe"),
+      apiKeyRef: secretRefSchema.optional(),
+      model: z.string().min(1).optional(),
+      baseUrl: z.string().url().optional(),
+      path: z.string().startsWith("/").optional(),
+      authStyle: z.enum(["bearer", "x-api-key", "none"]).optional(),
+    })
+    .strict(),
+  z.object({ kind: z.literal("core"), model: z.string().min(1).optional() }).strict(),
+]);
+export type ProviderConfig = z.infer<typeof providerConfigSchema>;
+
 export const jevConfigSchema = z.object({
+  /** Deprecated: read as an implicit `typesafe` provider when `providers` is empty. */
   apiKeyRef: secretRefSchema.optional(),
-  model: z.string().min(1).default(DEFAULT_JEV_MODEL),
+  /** Deprecated, see `apiKeyRef`. */
+  model: z.string().min(1).optional(),
+  /** Deprecated, see `apiKeyRef`. */
   baseUrl: z.string().url().optional(),
+  providers: z.record(providerIdSchema, providerConfigSchema).default({}),
+  defaultProvider: z.string().min(1).optional(),
+  /** Resolved by the registry; called alongside the primary from G5 on. */
+  shadowProviders: z.array(z.string().min(1)).default([]),
   timeoutMs: z.number().int().positive().default(10_000),
   dailyTokenBudget: z.number().int().positive().default(5_000_000),
   policies: z.record(z.string(), policyConfigSchema).default({}),
@@ -142,10 +181,41 @@ export const jevConfigSchema = z.object({
 });
 export type JevConfig = z.infer<typeof jevConfigSchema>;
 
+/** What `policyConfigFor` needs to know about the provider that will answer. */
+export interface ProviderBinding {
+  /** `"<provider>/<model>"`, the key per-provider thresholds are stored under. */
+  key: string;
+  confidence: "native" | "derived" | "none";
+  /** True for the provider today's thresholds and modes were calibrated on
+   * (TypeSafe Jev). A mode set while running on it carries over unchanged. */
+  baseline: boolean;
+}
+
 /** Every policy ships in `shadow` mode until its eval report clears the bar
- * for `enforce` — this is the single place that default is encoded. */
-export function policyConfigFor(config: JevConfig, policyName: string): PolicyConfig {
-  return config.policies[policyName] ?? { enabled: true, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {} };
+ * for `enforce` — this is the single place that default is encoded.
+ *
+ * With a `binding`, thresholds resolve by `provider/model` with fallback to
+ * the policy-wide numbers, and the mode is held at `shadow` when the provider
+ * reports no confidence, or when it isn't the baseline provider and has no
+ * thresholds of its own (a policy promoted on one provider is not promoted on
+ * another until it's calibrated there). */
+export function policyConfigFor(config: JevConfig, policyName: string, binding?: ProviderBinding): PolicyConfig {
+  const raw = config.policies[policyName];
+  if (!raw) return { enabled: true, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {} };
+
+  const thresholds: Record<string, number> = {};
+  for (const [name, value] of Object.entries(raw.thresholds)) {
+    if (typeof value === "number") thresholds[name] = value;
+  }
+  const override = binding ? raw.thresholds[binding.key] : undefined;
+  const hasOverride = typeof override === "object";
+  if (hasOverride) Object.assign(thresholds, override);
+
+  let mode = raw.mode;
+  if (binding && mode !== "shadow" && (binding.confidence === "none" || (!binding.baseline && !hasOverride))) {
+    mode = "shadow";
+  }
+  return { ...raw, thresholds, mode };
 }
 
 export function parseJevConfig(raw: Record<string, unknown>): JevConfig {
