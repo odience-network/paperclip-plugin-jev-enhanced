@@ -18,7 +18,8 @@ const fieldLabelStyle = { display: "grid", gap: "0.25rem" } as const;
 interface RawPolicyConfig {
   enabled?: boolean;
   mode?: PolicyMode;
-  thresholds?: Record<string, number>;
+  /** Numbers, or per-provider override blocks keyed "<provider>/<model>". */
+  thresholds?: Record<string, number | Record<string, number>>;
 }
 
 interface RawJevConfig {
@@ -140,7 +141,7 @@ export function SettingsPage({ context }: PluginSettingsPageProps) {
   function handleThresholdsChange(policyName: string, text: string) {
     setThresholdsText((prev) => ({ ...prev, [policyName]: text }));
     try {
-      const parsed = JSON.parse(text) as Record<string, number>;
+      const parsed = JSON.parse(text) as Record<string, number | Record<string, number>>;
       setThresholdsError((prev) => ({ ...prev, [policyName]: "" }));
       setPolicy(policyName, { thresholds: parsed });
     } catch {
