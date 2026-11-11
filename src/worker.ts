@@ -565,10 +565,12 @@ function requireActionCompanyId(context: PluginPerformActionContext): string {
   return context.companyId;
 }
 
-type ProviderHealth =
+type ProviderHealth = (
   | { status: "ok"; modelCount: number }
   | { status: "unbound" }
-  | { status: "unreachable"; message: string };
+  | { status: "unchecked" }
+  | { status: "unreachable"; message: string }
+) & { verification?: "live" | "fixtures" };
 
 const PROVIDER_HEALTH_CACHE_MS = 60_000;
 // Keyed by the config fields that actually determine reachability (not by
@@ -609,6 +611,8 @@ async function checkProviderHealth(ctx: PluginContext, config: VerdictConfig): P
     health = availability.ok
       ? { status: "ok", modelCount: 0 }
       : { status: "unreachable", message: `core: ${availability.reason ?? CORE_UNAVAILABLE_REASON}` };
+  } else if ((await provider.availability()).reason === "not-checked") {
+    health = { status: "unchecked" };
   } else {
     try {
       const models = (await provider.listModels?.()) ?? [];
@@ -617,6 +621,7 @@ async function checkProviderHealth(ctx: PluginContext, config: VerdictConfig): P
       health = { status: "unreachable", message: error instanceof Error ? error.message : String(error) };
     }
   }
+  health = { ...health, verification: provider.verification };
   providerHealthCache.set(key, { at: now, health });
   return health;
 }
@@ -1088,6 +1093,12 @@ const plugin = definePlugin({
       return {
         status: "degraded",
         message: `TypeSafe is unreachable with the bound key: ${health.message}`,
+      };
+    }
+    if (health.status === "unchecked") {
+      return {
+        status: "ok",
+        message: "Plugin worker is running; the default provider publishes no health endpoint and is not live-verified",
       };
     }
     return {

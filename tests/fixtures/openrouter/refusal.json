@@ -1,0 +1,31 @@
+{
+  "source": "docs",
+  "docsUrl": "https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-questions-and-answers-request",
+  "notes": "Documented answer variant {type: \"refusal\"} (no value). Must fail the decision, never become an answer.",
+  "path": "/api/alpha/decisions",
+  "request": {
+    "model": "typesafe/jev-1.13",
+    "state": "Example state.",
+    "questions": {
+      "is_bug": {
+        "type": "noul",
+        "instructions": "Is this a software defect?"
+      }
+    }
+  },
+  "response": {
+    "id": "gen-dec-0000000001-fixture",
+    "provider": "TypeSafe",
+    "model": "typesafe/jev-1.13-20260917",
+    "answers": {
+      "is_bug": {
+        "type": "refusal"
+      }
+    },
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 0,
+      "cost": 1.7e-06
+    }
+  }
+}

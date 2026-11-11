@@ -173,7 +173,19 @@ export function validateProviderConfig(config: VerdictConfig, host: unknown): Pr
 
   for (const [id, providerConfig] of Object.entries(providers)) {
     if (providerConfig.kind === "systemone") {
-      if (!SYSTEMONE_PRESETS[providerConfig.preset]) errors.push(`providers.${id}: unknown preset "${providerConfig.preset}".`);
+      const preset = SYSTEMONE_PRESETS[providerConfig.preset];
+      if (!preset) {
+        errors.push(`providers.${id}: unknown preset "${providerConfig.preset}".`);
+        continue;
+      }
+      if (!preset.defaultModel && !providerConfig.model) errors.push(`providers.${id}: preset "${preset.name}" needs a model.`);
+      if (!preset.baseUrl && !providerConfig.baseUrl) errors.push(`providers.${id}: preset "${preset.name}" needs a baseUrl.`);
+      if (preset.verification === "fixtures") {
+        warnings.push(
+          `providers.${id}: preset "${preset.name}" is not live-verified; policies on it stay in shadow until ` +
+            "thresholds are calibrated for it.",
+        );
+      }
     } else if (providerConfig.kind === "core" && !coreDetected) {
       warnings.push(`providers.${id}: core: unavailable on this host; it is skipped until the host exposes decisions.`);
     }

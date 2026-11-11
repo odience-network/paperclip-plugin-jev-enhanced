@@ -187,13 +187,13 @@ export class DecisionPipeline {
       }
     }
 
-    const { hostInvocationId, ...result } = await this.semaphore.run(() =>
+    const { hostInvocationId, reportedCost, ...result } = await this.semaphore.run(() =>
       provider.decide(
         { state: truncated, questions: input.questions, model: provider.model },
         { signal: AbortSignal.timeout(this.totalBudgetMs) },
       ),
     );
-    const cost = hostBilled ? null : (provider.estimateCostUsd?.(result.usage) ?? null);
+    const cost = hostBilled ? null : (reportedCost ?? provider.estimateCostUsd?.(result.usage) ?? null);
 
     if (budgetStore) {
       const dateKey = utcDateKey(this.now());

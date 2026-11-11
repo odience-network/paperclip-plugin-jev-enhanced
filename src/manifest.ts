@@ -95,13 +95,20 @@ const manifest: PaperclipPluginManifestV1 = {
         description:
           "Decision providers by alias. Each entry is { kind: \"systemone\", preset, apiKeyRef, model?, baseUrl?, " +
           "path?, authStyle? } or { kind: \"core\" }. Preset \"typesafe\" sends redacted state text to TypeSafe " +
-          "(api.typesafe.ai; zero data retention on enterprise plans). \"core\" uses the host's own decision " +
-          "service where the host exposes one, holds no credential, and is billed by the host.",
+          "(api.typesafe.ai; zero data retention on enterprise plans). Presets \"perplexity\", \"openrouter\", " +
+          "\"decisions-api\" and \"kev\" (Opper, EU) send it to that hosted provider; \"ollama\", \"laya\" and \"von\" " +
+          "send it to your own server at baseUrl. Those seven are built from published docs and are not " +
+          "live-verified: policies on them stay in shadow until thresholds are calibrated for them. \"core\" uses " +
+          "the host's own decision service where the host exposes one, holds no credential, and is billed by the host.",
         additionalProperties: {
           type: "object",
           properties: {
             kind: { type: "string", enum: ["systemone", "core"] },
-            preset: { type: "string", enum: ["typesafe"], default: "typesafe" },
+            preset: {
+              type: "string",
+              enum: ["typesafe", "perplexity", "openrouter", "decisions-api", "ollama", "laya", "von", "kev"],
+              default: "typesafe",
+            },
             apiKeyRef: { type: "string", format: "secret-ref" },
             model: { type: "string" },
             baseUrl: { type: "string" },

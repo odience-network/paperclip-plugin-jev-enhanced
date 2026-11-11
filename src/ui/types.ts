@@ -47,10 +47,14 @@ export interface FeedbackSummary {
   agreementRate: number | null;
 }
 
-export type ProviderHealth =
+/** `verification: "fixtures"` marks a Tier B provider: built from published
+ * docs and never called live, shown as "not live-verified". */
+export type ProviderHealth = (
   | { status: "ok"; modelCount: number }
   | { status: "unbound" }
-  | { status: "unreachable"; message: string };
+  | { status: "unchecked" }
+  | { status: "unreachable"; message: string }
+) & { verification?: "live" | "fixtures" };
 
 export interface PolicyAggregate {
   policy: string;

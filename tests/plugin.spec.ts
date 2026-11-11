@@ -237,6 +237,32 @@ describe("plugin scaffold", () => {
     expect(health?.status).toBe("ok");
   });
 
+  it("reports a Tier B default provider as not live-verified without calling it", async () => {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: [...manifest.capabilities, "events.emit"],
+      config: {
+        providers: { pplx: { kind: "systemone", preset: "perplexity", apiKeyRef: { type: "secret_ref", secretId: "secret_1" } } },
+        defaultProvider: "pplx",
+      },
+    });
+    harness.ctx.db = createFakeDb();
+    harness.ctx.secrets.resolve = async () => "sk-test";
+    const fetched: string[] = [];
+    harness.ctx.http.fetch = (async (input: string | URL | Request) => {
+      fetched.push(String(input));
+      throw new Error("no network in tests");
+    }) as typeof harness.ctx.http.fetch;
+    await plugin.definition.setup(harness.ctx);
+
+    const summary = await harness.getData<{ providerHealth: unknown }>("dashboard-summary", { companyId: "company_1" });
+    expect(summary.providerHealth).toEqual({ status: "unchecked", verification: "fixtures" });
+    const health = await plugin.definition.onHealth?.();
+    expect(health?.status).toBe("ok");
+    expect(health?.message).toMatch(/not live-verified/);
+    expect(fetched).toEqual([]);
+  });
+
   it("validateConfig degrades to a warning (not an error) when no API key is bound", async () => {
     const result = await plugin.definition.onValidateConfig?.({});
     expect(result?.ok).toBe(true);

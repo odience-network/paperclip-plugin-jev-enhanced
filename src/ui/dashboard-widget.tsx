@@ -25,7 +25,10 @@ export function DashboardWidget({ context }: PluginWidgetProps) {
       ? `ok (${data.providerHealth.modelCount} models)`
       : data.providerHealth.status === "unbound"
         ? "no API key bound"
-        : `unreachable: ${data.providerHealth.message}`;
+        : data.providerHealth.status === "unchecked"
+          ? "configured (provider publishes no health endpoint)"
+          : `unreachable: ${data.providerHealth.message}`;
+  const verificationLabel = data.providerHealth.verification === "fixtures" ? " (not live-verified)" : "";
 
   return (
     <div style={{ display: "grid", gap: "0.5rem" }}>
@@ -38,7 +41,10 @@ export function DashboardWidget({ context }: PluginWidgetProps) {
       <div>
         Mode split — shadow: {data.modeSplit.shadow}, suggest: {data.modeSplit.suggest}, enforce: {data.modeSplit.enforce}
       </div>
-      <div>Provider health: {providerHealthLabel}</div>
+      <div>
+        Provider health: {providerHealthLabel}
+        {verificationLabel}
+      </div>
     </div>
   );
 }

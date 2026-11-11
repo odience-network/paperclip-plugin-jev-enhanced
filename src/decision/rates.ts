@@ -26,6 +26,12 @@ export const RATE_CARDS: Record<string, RateCard> = {
     models: { [DEFAULT_TYPESAFE_MODEL]: { input: 0.5, output: 1.5 } },
     default: { input: 0.5, output: 1.5 },
   },
+  // Opper's September 2026 list price for Kev 4B: input only, output free.
+  kev: {
+    version: "kev-opper-2026-09",
+    models: { "opper/kev-4b": { input: 0.042, output: 0 } },
+    default: { input: 0.042, output: 0 },
+  },
 };
 
 export function estimateCostFromCard(card: RateCard, model: string, usage: DecisionUsage): CostEstimate {

@@ -44,8 +44,10 @@ export interface CostEstimate {
 }
 
 /** `hostInvocationId` is set by host-billed providers so the ledger row can
- * join to the host's own cost record. Never cached. */
-export type ProviderDecision = DecisionResult & { hostInvocationId?: string };
+ * join to the host's own cost record. `reportedCost` is the cost the provider
+ * returned with the answer (OpenRouter `usage.cost`), used instead of a rate
+ * card. Neither is cached. */
+export type ProviderDecision = DecisionResult & { hostInvocationId?: string; reportedCost?: CostEstimate };
 
 export interface DecisionProvider {
   /** Config alias, e.g. `"typesafe"`, `"cf-clef"`, `"core"`. */

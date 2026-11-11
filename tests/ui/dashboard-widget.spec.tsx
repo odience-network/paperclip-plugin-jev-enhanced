@@ -68,6 +68,27 @@ describe("DashboardWidget", () => {
     }
   });
 
+  it("flags a Tier B default provider as not live-verified", async () => {
+    const { harness, uninstall } = await installUiTestBridge({ companyId: "company_1" });
+    try {
+      const original = harness.getData.bind(harness);
+      harness.getData = (async (key: string, params?: Record<string, unknown>) => {
+        const data = await original(key, params);
+        if (key !== "dashboard-summary") return data;
+        return { ...(data as object), providerHealth: { status: "unchecked", verification: "fixtures" } };
+      }) as typeof harness.getData;
+
+      renderWidget("company_1");
+      await waitFor(() =>
+        expect(
+          screen.getByText(/Provider health: configured \(provider publishes no health endpoint\) \(not live-verified\)/),
+        ).toBeTruthy(),
+      );
+    } finally {
+      uninstall();
+    }
+  });
+
   it("shows populated decision counts, cost, agreement rate, and mode split", async () => {
     const { harness, uninstall } = await installUiTestBridge({ companyId: "company_1" });
     try {

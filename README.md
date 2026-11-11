@@ -12,16 +12,50 @@ per company and can be overridden per policy, with fallback chains. See
 
 ## Providers
 
-| Provider | Kind / preset | Default model | Verification |
-|---|---|---|---|
-| TypeSafe | `systemone` / `typesafe` | `jev-1.13.0` | live |
-| Paperclip core | `core` (feature-detected, unavailable on released hosts) | host-chosen | fixtures |
+| Provider | Kind / preset | Default model | Verification | Thresholds |
+|---|---|---|---|---|
+| TypeSafe | `systemone` / `typesafe` | `jev-1.13.0` | live | baseline |
+| Paperclip core | `core` (feature-detected, unavailable on released hosts) | host-chosen | fixtures | none |
+| Perplexity Decisions | `systemone` / `perplexity` | `pplx-decider-v1-27b` | not live-verified | none |
+| OpenRouter (alpha decisions) | `systemone` / `openrouter` | `typesafe/jev-1.13` | not live-verified | none |
+| decisions-api.dev | `systemone` / `decisions-api` | none: set `model` | not live-verified | none |
+| Ollama (Clef) | `systemone` / `ollama` | `clef` (or `clef-flash`) | not live-verified | none |
+| Laya (community server) | `systemone` / `laya` | `laya`; set `baseUrl` | not live-verified | none |
+| von | `systemone` / `von` | `von-1.3.0` | not live-verified | none |
+| Kev (Opper, EU) | `systemone` / `kev` | `opper/kev-4b` | not live-verified | none |
 
 "live" means the provider is exercised by the env-gated live smoke test
-(`pnpm test:live`) as well as the mock-server contract suite; "fixtures"
-means contract tests and recorded or docs-derived fixtures only. Cloudflare
-Workers AI, OpenAI Decisions and the remaining SystemOne presets land in
-G3/G4 and are added here with their tier.
+(`pnpm test:live`) as well as the mock-server contract suite; "fixtures" /
+"not live-verified" means contract tests and recorded or docs-derived
+fixtures only. Cloudflare Workers AI and OpenAI Decisions land in G3 and are
+added here with their tier.
+
+Thresholds "none" means none: run the eval dataset (`pnpm eval`) on the
+provider when you have access and set `policies.<name>.thresholds["<alias>/<model>"]`.
+Until then a policy on that provider is held at `shadow`, whatever its
+configured mode.
+
+#### Not-live-verified presets (built from published docs)
+
+No account exists for any of these, so nothing here has ever called the real
+API. Each preset is a row in `src/decision/providers/presets.ts` (host, path,
+auth style, caps, disclosure, `docsUrl`), passes the L1 contract suite
+against the mock server, and replays the docs-derived fixtures in
+`tests/fixtures/<preset>/` (`"source": "docs"`).
+
+| Preset | Endpoint | Auth | Caps and notes |
+|---|---|---|---|
+| `perplexity` | `POST https://api.perplexity.ai/v1/decisions` | Bearer | Reference caps (not published). Images accepted in Perplexity's own format; flag reserved. No published price, cost recorded as 0. |
+| `openrouter` | `POST https://openrouter.ai/api/alpha/decisions` | Bearer | Jev caps. Cost is the response's `usage.cost` (credits = USD; BYOK: fee only), not a rate card. Dated model echo (`…-20260917`) is mapped to the pin; a `refusal` answer fails the decision. |
+| `decisions-api` | `POST https://decisions-api.dev/v1/systemone` | Bearer | Max 8 questions. Response envelope `{code, data: {result, creditsUsed}}` is unwrapped; `code != 0` fails. Cost is `creditsUsed / 10,000` USD. |
+| `ollama` | `POST http://localhost:11434/v1/systemone` | none | 64 questions, 26 options, 10 levels (local). Ollama 0.35.1+. Models from `GET /api/tags`. |
+| `laya` | `POST <baseUrl>/v1/systemone` | none | 20 options (quality collapses above). Confidence derived: 1 − normalised entropy; overconfident until calibrated. |
+| `von` | `POST http://localhost:8000/v1/systemone` | none (bearer if `VON_API_KEY`) | Confidence derived from a calibration map (`von calibrate` refits it). Banded `noul` is replaced by `noul_raw`, the calibrated posterior. English only; repo archived. |
+| `kev` | `POST https://api.opper.ai/v3/compat/v1/systemone` | Bearer | EU-hosted. `noul` and `choice` only. $0.042 / 1M input tokens. For a self-hosted `kev-onnx` server set `baseUrl` and `authStyle: "none"`. |
+
+Presets without a documented models endpoint are not pinged by the health
+check (any other request would cost money); the dashboard shows them as
+"configured (provider publishes no health endpoint) (not live-verified)".
 
 ### Secrets
 

@@ -1,0 +1,46 @@
+{
+  "source": "docs",
+  "docsUrl": "https://opper.ai/blog/jev-vs-kev-open-decision-model",
+  "notes": "Opper's SystemOne-compatible endpoint (same wire format as Jev; only model changes). Kev returns a probability for every option and has no per-request token overhead (a one-line message with one question is ~23 tokens). Only noul and choice are documented.",
+  "path": "/v3/compat/v1/systemone",
+  "request": {
+    "model": "opper/kev-4b",
+    "state": "Customer writes: I was charged twice for my subscription this month and want a refund.",
+    "questions": {
+      "refund": {
+        "type": "noul",
+        "instructions": "Is the customer asking for a refund?"
+      },
+      "team": {
+        "type": "choice",
+        "instructions": "Which team?",
+        "criteria": {
+          "billing": null,
+          "support": null
+        }
+      }
+    }
+  },
+  "response": {
+    "model": "opper/kev-4b",
+    "answers": {
+      "refund": {
+        "type": "noul",
+        "noul": 0.93
+      },
+      "team": {
+        "type": "choice",
+        "choice": "billing",
+        "probabilities": {
+          "billing": 0.88,
+          "support": 0.12
+        },
+        "confidence": 0.88
+      }
+    },
+    "usage": {
+      "input_tokens": 23,
+      "output_tokens": 0
+    }
+  }
+}

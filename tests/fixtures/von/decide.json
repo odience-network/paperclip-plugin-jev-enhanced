@@ -1,0 +1,53 @@
+{
+  "source": "docs",
+  "docsUrl": "https://github.com/wfzyx/von",
+  "notes": "Request is the published curl example. In default band mode noul is 0.8 + 0.1*(p - 0.5) for p >= 0.5 (mirrored below) and carries no gate signal; the docs say to gate on noul_raw, the calibrated posterior. Confidence comes from a calibration map over one encoder pass (`von calibrate` refits it). The truncation field appears when state was middle-truncated; its exact shape is not documented and is illustrative here.",
+  "path": "/v1/systemone",
+  "request": {
+    "model": "von-1.3.0",
+    "state": {
+      "error": "Disk volume /var/log at 98% capacity."
+    },
+    "questions": {
+      "needs_action": {
+        "type": "noul",
+        "instructions": "Does this require operational intervention?"
+      },
+      "team": {
+        "type": "choice",
+        "instructions": "Who owns this?",
+        "criteria": {
+          "sre": "Infrastructure and capacity",
+          "app": "Application code"
+        }
+      }
+    }
+  },
+  "response": {
+    "model": "von-1.3.0",
+    "truncation": {
+      "original_tokens": 9100,
+      "kept_tokens": 8192
+    },
+    "answers": {
+      "needs_action": {
+        "type": "noul",
+        "noul": 0.847,
+        "noul_raw": 0.97
+      },
+      "team": {
+        "type": "choice",
+        "choice": "sre",
+        "probabilities": {
+          "sre": 0.84,
+          "app": 0.16
+        },
+        "confidence": 0.84
+      }
+    },
+    "usage": {
+      "input_tokens": 31,
+      "output_tokens": 0
+    }
+  }
+}
