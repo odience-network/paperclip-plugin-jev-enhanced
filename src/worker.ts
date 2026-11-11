@@ -23,9 +23,17 @@ import {
   getLatestDecisionForPolicy,
   listDecisionHistory,
   listRecentDecisionsForPolicy,
+  listLatestDecisionsByPolicy,
+  getDecisionById,
   getPolicyAggregate,
+  getDailyDecisionStats,
+  getModeSplit,
+  recordFeedback,
+  getFeedbackSummary,
+  listFeedbackForDecisions,
   type DecisionRow,
   type LedgerDb,
+  type FeedbackVerdict,
 } from "./ledger/index.js";
 import {
   policies,
@@ -58,6 +66,7 @@ import { guardEvaluateRequestSchema } from "./guard/types.js";
 import { evaluateGuard, fallbackDecision, POLICY_FOR_HOOK } from "./guard/evaluate.js";
 import { createGuardRateLimiter, type GuardRateLimiter } from "./guard/rateLimit.js";
 import { decideBrowserAction } from "./tools/browserDecision.js";
+import { CALIBRATION_REPORTS } from "./eval-reports/index.js";
 
 const jevCache = createInMemoryJevCache();
 
@@ -534,6 +543,57 @@ async function handleGuardEvaluate(ctx: PluginContext, input: PluginApiRequestIn
   return { status: 200, body: result };
 }
 
+/** `context.companyId` is the host-authorized scope for a `performAction`
+ * call (see `PluginPerformActionContext`) — never something an action's
+ * `params` can override, same rationale as `requireCompanyId` for data reads. */
+function requireActionCompanyId(context: PluginPerformActionContext): string {
+  if (!context.companyId) {
+    throw new Error("companyId is required");
+  }
+  return context.companyId;
+}
+
+type ProviderHealth =
+  | { status: "ok"; modelCount: number }
+  | { status: "unbound" }
+  | { status: "unreachable"; message: string };
+
+const PROVIDER_HEALTH_CACHE_MS = 60_000;
+// Keyed by the config fields that actually determine reachability (not by
+// companyId directly), so two companies sharing the same key/baseUrl/model
+// share a cache entry but — with `multiCompanyConfig: true` — distinct
+// per-company config never bleeds into another company's cached result.
+const providerHealthCache = new Map<string, { at: number; health: ProviderHealth }>();
+
+function providerHealthCacheKey(config: JevConfig): string {
+  return JSON.stringify([config.apiKeyRef, config.baseUrl, config.model]);
+}
+
+/** Shared by `onHealth` (host health check) and the `dashboard-summary` data
+ * handler (UI provider-health metric) so the two never drift. Cached for
+ * ~60s: `dashboard-summary` is read on every widget render, and a live
+ * `listModels()` call on each one is wasted load against TypeSafe. */
+async function checkProviderHealth(ctx: PluginContext, config: JevConfig): Promise<ProviderHealth> {
+  if (!config.apiKeyRef) {
+    return { status: "unbound" };
+  }
+  const key = providerHealthCacheKey(config);
+  const now = Date.now();
+  const cached = providerHealthCache.get(key);
+  if (cached && now - cached.at < PROVIDER_HEALTH_CACHE_MS) {
+    return cached.health;
+  }
+  let health: ProviderHealth;
+  try {
+    const models = await buildClient(ctx, config).listModels();
+    health = { status: "ok", modelCount: models.length };
+  } catch (error) {
+    health = { status: "unreachable", message: error instanceof Error ? error.message : String(error) };
+  }
+  providerHealthCache.set(key, { at: now, health });
+  return health;
+}
+
 const plugin = definePlugin({
   multiCompanyConfig: true,
 
@@ -737,6 +797,64 @@ const plugin = definePlugin({
       return listRecentDecisionsForPolicy(ctx.db, companyId, commentTriagePolicy.name, limit);
     });
 
+    ctx.data.register("decisions-latest-by-policy", async (params) => {
+      const companyId = requireCompanyId(params);
+      const issueId = String(params.issueId ?? "");
+      const decisions = await listLatestDecisionsByPolicy(ctx.db, companyId, issueId);
+      const feedback = await listFeedbackForDecisions(ctx.db, decisions.map((d) => d.id));
+      return { decisions, feedback };
+    });
+
+    ctx.data.register("dashboard-summary", async (params) => {
+      const companyId = requireCompanyId(params);
+      const config = await loadConfig(ctx, companyId);
+      const since = new Date();
+      since.setUTCDate(since.getUTCDate() - 30);
+
+      const [dailyStats, modeSplit, feedbackSummary, providerHealth, policyAggregates] = await Promise.all([
+        getDailyDecisionStats(ctx.db, companyId, since.toISOString()),
+        getModeSplit(ctx.db, companyId),
+        getFeedbackSummary(ctx.db, companyId),
+        checkProviderHealth(ctx, config),
+        Promise.all(Object.keys(policies).map((policy) => getPolicyAggregate(ctx.db, companyId, policy))),
+      ]);
+
+      return { dailyStats, modeSplit, feedbackSummary, providerHealth, policyAggregates };
+    });
+
+    ctx.data.register("calibration-summary", async () => {
+      return CALIBRATION_REPORTS;
+    });
+
+    ctx.actions.register("feedback", async (params, actionContext) => {
+      const companyId = requireActionCompanyId(actionContext);
+      const decisionId = String(params.decisionId ?? "");
+      if (!decisionId) {
+        throw new Error("decisionId is required");
+      }
+      if (params.verdict !== "accept" && params.verdict !== "override") {
+        throw new Error('verdict must be "accept" or "override"');
+      }
+      const verdict: FeedbackVerdict = params.verdict;
+
+      // Fail closed: a decisionId alone must never be enough to write feedback
+      // against another company's decision.
+      const decision = await getDecisionById(ctx.db, companyId, decisionId);
+      if (!decision) {
+        throw new Error("Decision not found for this company");
+      }
+
+      // Ledger rows hold no free text — `note` is never read from `params`,
+      // regardless of what a caller sends.
+      const feedbackId = await recordFeedback(ctx.db, {
+        decisionId,
+        verdict,
+        userId: actionContext.actor.userId,
+        agentId: actionContext.actor.agentId,
+      });
+      return { id: feedbackId, decisionId, verdict };
+    });
+
     ctx.jobs.register("daily-budget-report", async (job) => {
       ctx.logger.info("jev.job.daily-budget-report", { runId: job.runId, scheduledAt: job.scheduledAt });
     });
@@ -931,28 +1049,25 @@ const plugin = definePlugin({
     }
 
     const config = await loadConfig(ctx);
-    if (!config.apiKeyRef) {
+    const health = await checkProviderHealth(ctx, config);
+    if (health.status === "unbound") {
       return {
         status: "degraded",
         message: "No TypeSafe API key bound yet. Create a key at console.typesafe.ai, add it to the vault, and " +
           "bind it to apiKeyRef.",
       };
     }
-
-    try {
-      const client = buildClient(ctx, config);
-      const models = await client.listModels();
-      return {
-        status: "ok",
-        message: "Plugin worker is running and TypeSafe is reachable",
-        details: { modelCount: models.length },
-      };
-    } catch (error) {
+    if (health.status === "unreachable") {
       return {
         status: "degraded",
-        message: `TypeSafe is unreachable with the bound key: ${error instanceof Error ? error.message : String(error)}`,
+        message: `TypeSafe is unreachable with the bound key: ${health.message}`,
       };
     }
+    return {
+      status: "ok",
+      message: "Plugin worker is running and TypeSafe is reachable",
+      details: { modelCount: health.modelCount },
+    };
   },
 
   async onValidateConfig(rawConfig: Record<string, unknown>): Promise<PluginConfigValidationResult> {

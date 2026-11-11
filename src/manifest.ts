@@ -1,8 +1,17 @@
 import { readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 import { DEFAULT_JEV_MODEL } from "./jev/models.js";
 
-const jevDecisionsSkillMarkdown = readFileSync(new URL("../skills/jev-decisions/SKILL.md", import.meta.url), "utf8");
+// Deliberately not `new URL("../skills/...", import.meta.url)`: Vite special-
+// cases that exact literal pattern as a static asset reference and rewrites
+// it to a dev-server URL under a jsdom test environment, which breaks this
+// plain `fs.readFileSync` read.
+const jevDecisionsSkillMarkdown = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../skills/jev-decisions/SKILL.md"),
+  "utf8",
+);
 
 const manifest: PaperclipPluginManifestV1 = {
   id: "odience.jev",
@@ -423,6 +432,12 @@ const manifest: PaperclipPluginManifestV1 = {
         displayName: "Jev Decisions",
         exportName: "IssueDecisionsTab",
         entityTypes: ["issue"],
+      },
+      {
+        type: "settingsPage",
+        id: "settings",
+        displayName: "Odience Jev Settings",
+        exportName: "SettingsPage",
       },
     ],
   },
