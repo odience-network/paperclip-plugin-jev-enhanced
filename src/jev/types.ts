@@ -1,14 +1,17 @@
 import { z } from "zod";
 
-const structured = z.union([z.string().min(1), z.record(z.string(), z.unknown()), z.array(z.unknown())]);
+export const structuredEntrySchema = z.union([z.string().min(1), z.record(z.string(), z.unknown()), z.array(z.unknown())]);
+const structured = structuredEntrySchema;
 const criterion = z.union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())]);
 
 /**
  * Adopted shape-for-shape from `typesafeAskSchema` in Paperclip core PR #13713
  * (packages/shared/src/typesafe.ts) so this client's request/response contract
  * stays swappable for a future core TypeSafe connection without a migration.
+ * Exported so `src/tools/schemas.ts` can validate the generic `jev:ask`
+ * tool's `questions` param against the exact same shape, without duplicating it.
  */
-const jevQuestionSchema = z.discriminatedUnion("type", [
+export const jevQuestionSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("noul"),

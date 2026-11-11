@@ -11,7 +11,8 @@
     "dev:ui": "paperclip-plugin-dev-server --root . --ui-dir dist/ui --port 4177",
     "test": "vitest run --config ./vitest.config.ts",
     "typecheck": "tsc --noEmit",
-    "eval": "tsx eval/run.ts"
+    "eval": "tsx eval/run.ts",
+    "eval:bench-guard": "tsx eval/bench-guard-route.ts"
   },
   "paperclipPlugin": {
     "manifest": "./dist/manifest.js",
@@ -35,13 +36,18 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@paperclipai/shared": "file:.paperclip-sdk/paperclipai-shared-0.3.1.tgz",
     "@paperclipai/plugin-sdk": "file:.paperclip-sdk/paperclipai-plugin-sdk-1.0.0.tgz",
+    "@paperclipai/shared": "file:.paperclip-sdk/paperclipai-shared-0.3.1.tgz",
     "@rollup/plugin-node-resolve": "^16.0.1",
     "@rollup/plugin-typescript": "^12.1.2",
+    "@testing-library/react": "^16",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.8",
+    "@types/react-dom": "^19",
     "esbuild": "^0.27.3",
+    "jsdom": "^25",
+    "react": "^19",
+    "react-dom": "^19",
     "rollup": "^4.38.0",
     "tslib": "^2.8.1",
     "tsx": "^4.19.2",

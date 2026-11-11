@@ -1,6 +1,6 @@
 import { APIConnectionError, APIError, APITimeoutError, AuthenticationError, PermissionDeniedError, RateLimitError } from "@typesafe-ai/sdk";
 import { BudgetExceededError } from "./budget.js";
-import { JevValidationError } from "./client.js";
+import { JevValidationError, MissingApiKeyError } from "./client.js";
 
 /**
  * Maps a thrown error to a short, fixed machine code — never the error's own
@@ -10,6 +10,7 @@ import { JevValidationError } from "./client.js";
  */
 export function classifyError(error: unknown): string {
   if (error instanceof BudgetExceededError) return "budget-exceeded";
+  if (error instanceof MissingApiKeyError) return "missing-api-key";
   if (error instanceof JevValidationError) return "validation-failed";
   if (error instanceof AuthenticationError) return "auth-failed";
   if (error instanceof PermissionDeniedError) return "permission-denied";

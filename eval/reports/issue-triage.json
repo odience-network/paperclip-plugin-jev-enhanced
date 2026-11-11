@@ -1,0 +1,18 @@
+{
+  "policy": "issue-triage",
+  "generatedAt": "2026-10-09T07:18:34.875Z",
+  "datasetSize": 60,
+  "metrics": {
+    "count": 60,
+    "accuracy": 0.95,
+    "agreement": 1,
+    "ece": 0.22466666666666657,
+    "avgLatencyMs": 1105.9166666666667,
+    "totalCostUsd": 0.1260000000000001,
+    "avgCostUsd": 0.002100000000000002
+  },
+  "recommendedThresholds": {
+    "confidenceMin": 0.5,
+    "marginMin": 0.05
+  }
+}
