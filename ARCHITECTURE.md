@@ -711,6 +711,34 @@ both of which are torn down with the plugin). The `verdict_decisions`/
 historical data survives a disable/re-enable cycle; a full uninstall drops
 the namespace per the host's normal plugin-uninstall data-retention policy.
 
+## Scope versus core's MCP tool gateway
+
+VerdictGuard (`src/guard/`, `hooks/`) covers harness-native tools (Bash,
+Edit, Write, browser actions driven through them) and the `Stop` event. MCP
+tools belong to Paperclip core's tool gateway, which applies its own risk
+classes, `allow | block | require_approval | rate_limit | trust_rule`
+policies and approval cards. VerdictGuard stays off them at two layers:
+
+- The hook matcher in `hooks/README.md` is `^(?!mcp__).*`.
+- `evaluateGuard` checks `isCoreGovernedTool(toolName)` (`src/guard/pre.ts`)
+  before any rail. For `PreToolUse`/`PostToolUse` on an `mcp__*` tool it
+  returns `allow` with reason `governed-by-core-tool-gateway`, and writes
+  one `rails-only` ledger row with outcome `applied`. It makes no provider
+  call. The `guard-pre`/`guard-post` `preFilter`s also reject these tools.
+
+The verdicts map one to one: `allow` → `allow`, `deny` → `deny` (core's
+`block` policy), `ask` → `require_approval`. The two surfaces differ: `ask`
+is a harness permission prompt, while `require_approval` is a board approval
+card.
+
+If both layers evaluated an MCP call, VerdictGuard could override a core
+trust rule, or add a second prompt next to core's card. The residual risk is
+a capability reachable both ways, e.g. Paperclip API writes via Bash `curl`
+or the Paperclip MCP tool. Each layer sees only its own path, so operators
+should mirror core's destructive-tool policies in the `guard-pre`
+thresholds and `blockedTools` for the native equivalents. `docs/SECURITY.md`
+has the full write-up under the same heading.
+
 ## Security posture
 
 - The TypeSafe API key is only ever read via `ctx.secrets.resolve`, bound to
