@@ -228,6 +228,8 @@ Two tables in the plugin's own database namespace (`verdict`, see
   host-billed provider, whose `cost_usd` is also null), and
   `decision_group_id` (joins a primary decision with its shadow-provider
   decisions; set to the row's own id until shadow calls land in G5).
+  `migrations/005_verdict_decision_confidence_source.sql` adds
+  `confidence_source` (see "Derived confidence").
 - **`verdict_feedback`** — human/agent review of a decision: `decision_id`,
   `user_id`/`agent_id`, `verdict` (`accept|override`), `note` (an
   operator-authored review note — not raw issue text).
@@ -319,9 +321,22 @@ which `worker.ts` wires to `ctx.secrets.resolve(apiKeyRef)` — never
 `thresholds` by `"<provider>/<model>"` (an object entry under
 `policies.<name>.thresholds`) with fallback to the policy-wide numbers. The
 mode is held at `shadow` when the provider's capabilities say
-`confidence: "none"`, or when the provider is not the baseline TypeSafe
-preset and has no thresholds of its own: a policy promoted on one provider
-stays observe-only on another until it is calibrated there (G5).
+`confidence: "none"`, or when the provider is not the baseline (TypeSafe on
+the pinned default `jev-1.13.0`) and has no thresholds of its own: a policy
+promoted on one provider stays observe-only on another until it is
+calibrated there (G5). `jev-1.14.0` is allowed but is not the baseline, so
+it runs shadow-only until a `"typesafe/jev-1.14.0"` block exists.
+
+### Derived confidence
+
+A SystemOne-shaped provider (any preset, or `core`) that returns
+`probabilities` for a choice or score answer without a `confidence` gets one
+from `withDerivedConfidence` (`src/decision/confidence.ts`) before
+validation, using the formulas TypeSafe and Perplexity both document:
+choice `(p − 1/n) / (1 − 1/n)`; score `max(0, 1 − Σ pᵢ·|i − m| / MAD_unif)`
+with `m` the most likely level and `MAD_unif = (1/n)·Σ |i − (n−1)/2|`. The
+ledger records `confidence_source` (`native`, `derived`, or null when no
+answer carries a confidence).
 
 ### Test layers
 
@@ -356,7 +371,7 @@ Company-scoped, validated by `src/config.ts` (`parseVerdictConfig`):
 | `defaultProvider` | `typesafe` (or the first provider) | Used by every policy without its own `provider` |
 | `shadowProviders` | `[]` | Resolved by the registry; called alongside the primary from G5 |
 | `apiKeyRef` | — | Deprecated. With an empty `providers` map, read as `providers.typesafe.apiKeyRef` (warning in `onValidateConfig`) |
-| `model` | `jev-1.13.0` | Deprecated, as above. Aliases resolve to a pinned version (preset `modelAliases`) |
+| `model` | `jev-1.13.0` | Deprecated, as above. `jev-1.13.0` or `jev-1.14.0`; aliases (`jev-latest`, `latest`, `jev-preview`) resolve to the pinned default, never the provider-side alias |
 | `baseUrl` | TypeSafe default | Deprecated, as above |
 | `timeoutMs` | `10000` | Per-attempt timeout |
 | `dailyTokenBudget` | `5,000,000` | Tokens/company/day across all policies |
