@@ -1,5 +1,12 @@
 import { usePluginData, type PluginWidgetProps } from "@paperclipai/plugin-sdk/ui";
-import { formatPercent, type DashboardSummary } from "./types.js";
+import { formatPercent, type DashboardSummary, type ProviderHealth } from "./types.js";
+
+function healthLabel(health: ProviderHealth): string {
+  if (health.status === "ok") return `ok (${health.modelCount} models)`;
+  if (health.status === "unbound") return "no API key bound";
+  if (health.status === "unchecked") return "configured (provider publishes no health endpoint)";
+  return `unreachable: ${health.message}`;
+}
 
 export function DashboardWidget({ context }: PluginWidgetProps) {
   const { companyId } = context;
@@ -20,16 +27,6 @@ export function DashboardWidget({ context }: PluginWidgetProps) {
   const totalDecisions = data.dailyStats.reduce((sum, day) => sum + day.decisionCount, 0);
   const totalCost = data.dailyStats.reduce((sum, day) => sum + day.totalCostUsd, 0);
 
-  const providerHealthLabel =
-    data.providerHealth.status === "ok"
-      ? `ok (${data.providerHealth.modelCount} models)`
-      : data.providerHealth.status === "unbound"
-        ? "no API key bound"
-        : data.providerHealth.status === "unchecked"
-          ? "configured (provider publishes no health endpoint)"
-          : `unreachable: ${data.providerHealth.message}`;
-  const verificationLabel = data.providerHealth.verification === "fixtures" ? " (not live-verified)" : "";
-
   return (
     <div style={{ display: "grid", gap: "0.5rem" }}>
       <strong>Verdict</strong>
@@ -42,10 +39,21 @@ export function DashboardWidget({ context }: PluginWidgetProps) {
         Mode split — shadow: {data.modeSplit.shadow}, suggest: {data.modeSplit.suggest}, enforce: {data.modeSplit.enforce}
       </div>
       <div>
-        Provider health: {providerHealthLabel}
-        {verificationLabel}
+        Provider health: {healthLabel(data.providerHealth)}
+        {data.providerHealth.verification === "fixtures" ? " (not live-verified)" : ""}
       </div>
       {data.providerHealth.caveat ? <div>{data.providerHealth.caveat}</div> : null}
+      {data.providers.length > 0 && (
+        <ul aria-label="Providers" style={{ margin: 0, paddingLeft: "1rem" }}>
+          {data.providers.map((provider) => (
+            <li key={provider.id} title={provider.disclosure}>
+              {provider.id}
+              {provider.isDefault ? " (default)" : ""}: {provider.kind}/{provider.model} —{" "}
+              {healthLabel(provider.health)} · {provider.verification === "live" ? "live-verified" : "not live-verified"}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

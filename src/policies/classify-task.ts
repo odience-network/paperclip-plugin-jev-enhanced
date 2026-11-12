@@ -1,4 +1,5 @@
-import { choice, noul, type Questions } from "@typesafe-ai/sdk";
+import { choice, noul } from "@typesafe-ai/sdk";
+import type { DecisionQuestions } from "../decision/types.js";
 import type { FieldDecision, Policy, PolicyVerdict } from "./types.js";
 import { confidenceMarginFor } from "./util.js";
 
@@ -39,8 +40,8 @@ export const classifyTaskPolicy: Policy<ClassifyTaskState> = {
     return typeof state.description === "string" && state.description.trim().length > 0;
   },
 
-  questions(state): Questions {
-    const questions: Questions = {
+  questions(state): DecisionQuestions {
+    const questions: DecisionQuestions = {
       workKind: choice(
         "What kind of work does this task require? Use the task description given above as state to decide.",
         Object.fromEntries(WORK_KIND_CATALOG.map((kind) => [kind, null])),

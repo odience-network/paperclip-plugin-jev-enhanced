@@ -1,5 +1,7 @@
 # Verdict
 
+[![Verdict CI](https://github.com/odience-network/paperclip-plugin-verdict/actions/workflows/ci.yml/badge.svg)](https://github.com/odience-network/paperclip-plugin-verdict/actions/workflows/ci.yml)
+
 Decision models for Paperclip: TypeSafe Jev, Cloudflare Clef, OpenAI
 Decisions, self-hosted.
 
@@ -12,23 +14,26 @@ per company and can be overridden per policy, with fallback chains. See
 
 ## Providers
 
-| Provider | Kind / preset | Default model | Verification | Thresholds |
-|---|---|---|---|---|
-| TypeSafe | `systemone` / `typesafe` | `jev-1.13.0` | live | baseline |
-| Paperclip core | `core` (feature-detected, unavailable on released hosts) | host-chosen | fixtures | none |
-| Perplexity Decisions | `systemone` / `perplexity` | `pplx-decider-v1-27b` | not live-verified | none |
-| OpenRouter (alpha decisions) | `systemone` / `openrouter` | `typesafe/jev-1.13` | not live-verified | none |
-| decisions-api.dev | `systemone` / `decisions-api` | none: set `model` (34+ models, fixtures only, 8 questions max) | not live-verified | none |
-| Ollama (Clef) | `systemone` / `ollama` | `clef` (or `clef-flash`)¹ | not live-verified | none |
-| Laya (community server) | `systemone` / `laya` | `laya`; set `baseUrl` | not live-verified | none |
-| von | `systemone` / `von` | `von-1.3.0` | not live-verified | none |
-| Kev (Opper, EU) | `systemone` / `kev` | `opper/kev-4b` | not live-verified | none |
+| Provider | Kind / preset | Default model | Verification |
+|---|---|---|---|
+| TypeSafe | `systemone` / `typesafe` | `jev-1.13.0` (`jev-1.14.0` allowed, shadow-only until calibrated) | live |
+| Cloudflare Workers AI (Clef, Clef Flash) | `cloudflare` (`accountId` + token) | `clef-flash` (or `clef`) | live |
+| OpenAI Decisions (GPT-6 Luna) | `openai` | `gpt-6-luna` | live |
+| Paperclip core | `core` (feature-detected, unavailable on released hosts) | host-chosen | fixtures |
+| Perplexity Decisions | `systemone` / `perplexity` | `pplx-decider-v1-27b` | not live-verified |
+| OpenRouter (alpha decisions) | `systemone` / `openrouter` | `typesafe/jev-1.13` | not live-verified |
+| decisions-api.dev | `systemone` / `decisions-api` | none: set `model` (34+ models, fixtures only, 8 questions max) | not live-verified |
+| Ollama (Clef) | `systemone` / `ollama` | `clef` (or `clef-flash`)¹ | not live-verified |
+| Laya (community server) | `systemone` / `laya` | `laya`; set `baseUrl` | not live-verified |
+| von | `systemone` / `von` | `von-1.3.0` | not live-verified |
+| Kev (Opper, EU) | `systemone` / `kev` | `opper/kev-4b` | not live-verified |
 
 "live" means the provider is exercised by the env-gated live smoke test
-(`pnpm test:live`) as well as the mock-server contract suite; "fixtures" /
-"not live-verified" means contract tests and recorded or docs-derived
-fixtures only. Cloudflare Workers AI and OpenAI Decisions land in G3 and are
-added here with their tier.
+(`pnpm test:live`), by scrubbed recordings replayed in CI
+(`tests/fixtures/<provider>/`) and by the mock-server contract suite;
+"fixtures" means contract tests and recorded or docs-derived fixtures only.
+"not live-verified" (the Tier B presets) means contract tests and
+docs-derived fixtures only; see below.
 
 ¹ Cloudflare `clef` and `clef-flash` (on Workers AI, Ollama or
 decisions-api.dev): live-verified on Workers AI and kept because the board
@@ -36,7 +41,7 @@ holds a token, but ranked 14th and 19th of 19 on Vals ClaimBench (2026-10-23),
 so not a recommended default. The dashboard repeats this next to provider
 health when the default provider runs either model.
 
-Thresholds "none" means none: run the eval dataset (`pnpm eval`) on the
+Tier B presets ship no thresholds: run the eval dataset (`pnpm eval`) on the
 provider when you have access and set `policies.<name>.thresholds["<alias>/<model>"]`.
 Until then a policy on that provider is held at `shadow`, whatever its
 configured mode.
@@ -100,6 +105,78 @@ Presets without a documented models endpoint are not pinged by the health
 check (any other request would cost money); the dashboard shows them as
 "configured (provider publishes no health endpoint) (not live-verified)".
 
+`ollama` and `von` default to a `http://localhost` base URL, which the host's
+plugin fetch refuses (see the `baseUrl` rules below): point `baseUrl` at a
+publicly reachable address. With a credential bound it must be `https:`.
+
+Example, all three Tier A providers with TypeSafe as the default:
+
+```jsonc
+{
+  "providers": {
+    "typesafe": { "kind": "systemone", "preset": "typesafe", "apiKeyRef": "<secret-ref>" },
+    "cf-clef":  { "kind": "cloudflare", "accountId": "<32-hex account id>", "apiKeyRef": "<secret-ref>", "model": "clef-flash" },
+    "luna":     { "kind": "openai", "apiKeyRef": "<secret-ref>" }
+  },
+  "defaultProvider": "typesafe",
+  "policies": { "issue-triage": { "fallbackProviders": ["cf-clef"] } }
+}
+```
+
+Each provider's disclosure (which host receives state text, and its
+published retention) is shown in the settings schema and next to the
+provider in the dashboard widget: Cloudflare does not store or train on
+requests; OpenAI retains requests up to 30 days for abuse monitoring
+unless the organization has approved zero data retention, and EU residency
+is available; TypeSafe has zero data retention on enterprise plans only. A
+`baseUrl` that points a provider somewhere other than its known host is
+disclosed as that origin with unknown retention. Provider
+calls can only reach the hosts of configured providers. OpenAI's
+`refusal` answers fail the call with error code `refused`; they are never
+turned into an answer, and the chain does not fall back on them.
+
+A `baseUrl` must be `https:` whenever the provider sends a credential
+(`apiKeyRef` bound, or any `authStyle` but `none`); config validation
+rejects `http:` there, since the token would go out in cleartext. Plain
+`http:` is only for an unauthenticated self-hosted server. The host's plugin
+fetch refuses loopback and private addresses, so such a server has to be
+reachable on a public address: a `http://localhost` endpoint cannot be
+called through it.
+
+Answers are checked against the questions each provider was sent: an answer
+to a question that wasn't asked, of the wrong type, choosing an option that
+wasn't offered (including one capped away for that provider) or scoring
+outside the levels fails as `invalid_output` and falls back like any other
+unusable reply. Redaction patterns apply to question text and option keys
+as well as state.
+
+### Shadow providers and per-provider thresholds
+
+`shadowProviders` lists providers asked alongside each policy's primary on
+live traffic, for comparison only. Each shadow is asked alone (never a
+fallback chain), recorded as a `shadow`-mode ledger row under the primary's
+`decision_group_id`, and never applied or suggested. A failing shadow is an
+`error` row with its `error_class`. Shadow calls count against the daily
+token budget. They run for policies driven through `runPolicy` (issue-triage,
+comment-triage, run-outcome-qa and the `verdict-*` tools), not for
+VerdictGuard hooks or the browser tool, which are latency-bound.
+
+```jsonc
+{ "defaultProvider": "typesafe", "shadowProviders": ["typesafe-114", "cf-clef", "luna"] }
+```
+
+Confidence is not portable across providers, so thresholds are per
+`provider/model`. Built-in defaults from the G5 eval
+(`eval/reports/providers.md`, `src/decision/thresholds.ts`) apply under any
+provider alias. Thresholds resolve in layers, the later winning. On the
+baseline: built-in default, then the policy's own numbers, then a
+`"<alias>/<model>"` override. On any other provider the built-in default beats
+the policy's own numbers, which were calibrated on the baseline: policy
+numbers, then built-in default, then the `"<alias>/<model>"` override. A provider other
+than the baseline (`typesafe/jev-1.13.0`) stays in `shadow` mode unless it has
+thresholds, built-in or set by you. Tier B presets never get built-in
+thresholds.
+
 ### Secrets
 
 Provider keys are vault secrets bound to `plugin:odience.verdict` and
@@ -137,7 +214,8 @@ A failure (invalid params, a budget-exhausted company, no API key bound, or
 a provider/validation error) never throws — it comes back as a typed error
 string (tool: `{error: "<code>"}`; route: an error-appropriate HTTP status
 with `{error: "<code>"}`). Common codes: `invalid-params` (400),
-`missing-api-key` (412), `budget-exceeded` (429), `validation-failed` (502).
+`missing-api-key` (412), `budget-exceeded` (429), `refused` (422, the provider
+declined to answer), `validation-failed` (502).
 
 ### `verdict-ask` — `POST /tools/ask`
 
@@ -398,3 +476,46 @@ pnpm build
 See `ARCHITECTURE.md` for the full module map and `eval/` for the
 recorded-fixture eval runner used to gate a policy's promotion from
 `shadow` to `enforce`.
+
+### Comparing providers (`eval/compare.ts`)
+
+`eval/compare.ts` reads a ledger export, groups rows by `decision_group_id`
+(a primary decision and its shadow decisions) and reports per
+`provider/model` (the provider that answered): availability with
+non-answers by error class, agreement with the primary per question and per
+verdict, p50 latency and cost per 1k decisions. With a labelled dataset it
+also reports accuracy, ECE (10 equal-width bins) and a threshold
+recommendation. Errored and skipped rows never enter accuracy or ECE.
+
+```sh
+# A production export: one ledger row per line, camelCase DecisionRow or raw
+# snake_case verdict_decisions rows. Agreement, availability, latency, cost.
+tsx eval/compare.ts --export decisions.jsonl --policy comment-triage
+
+# With labels: case ids in the dataset must match the rows' issueId.
+tsx eval/compare.ts --export eval/datasets/live/comment-triage.ledger.jsonl \
+  --policy comment-triage --dataset eval/datasets/comment-triage.jsonl --out report.md
+```
+
+To get a ledger export from Postgres:
+
+```sql
+COPY (SELECT row_to_json(d) FROM plugin_verdict_acf66b4489.verdict_decisions d
+      WHERE company_id = '<company>' AND decision_group_id IS NOT NULL) TO STDOUT;
+```
+
+The committed per-provider report is built in three steps. The first runs on
+a developer machine with the `.env` tokens and never in CI. It sends every
+dataset case through `runPolicy` with TypeSafe 1.13 as primary and the other
+Tier A providers as shadows, and writes `eval/datasets/live/<policy>.ledger.jsonl`:
+
+```sh
+tsx eval/live-run.ts --policy comment-triage --env-file .env
+tsx eval/report-providers.ts   # offline: eval/reports/providers.{md,json}
+```
+
+`eval/import-training-export.ts` turns Paperclip core's labelled human
+decisions (`GET /api/companies/{companyId}/decision-training/export.jsonl`,
+board-only) into eval datasets for comment-triage and run-outcome-qa. It
+replaces all text and ids with hashes unless `--keep-text` is given, which
+only writes under the gitignored `eval/results/`.

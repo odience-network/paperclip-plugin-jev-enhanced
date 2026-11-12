@@ -14,10 +14,12 @@ export async function installUiTestBridge(options: {
   companyId: string;
   entityId?: string;
   actor?: Partial<PluginPerformActionActorContext>;
+  config?: Record<string, unknown>;
 }): Promise<{ harness: TestHarness; uninstall: () => void }> {
   const harness = createTestHarness({
     manifest: plugin,
     capabilities: [...plugin.capabilities, "events.emit"],
+    config: options.config,
   });
   harness.ctx.db = createFakeDb();
   await workerPlugin.definition.setup(harness.ctx);

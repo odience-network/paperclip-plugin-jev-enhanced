@@ -1,4 +1,5 @@
 import { TypeSafeClient, type Fetch, type RetryPolicy } from "@typesafe-ai/sdk";
+import { withDerivedConfidence } from "../confidence.js";
 import { classifyError, VerdictValidationError } from "../errors.js";
 import type { DecisionProvider, DecisionRequest, ModelCard, ProviderAvailability, ProviderDecision } from "../provider.js";
 import { estimateCostFromCard, RATE_CARDS } from "../rates.js";
@@ -101,14 +102,15 @@ export class SystemOneProvider implements DecisionProvider {
     const json: unknown = JSON.parse(JSON.stringify(raw));
     const { body, reportedCost } = this.options.preset.normalizeResponse?.(json, req.model) ?? { body: json };
     assertNoRefusal(body);
-    const parsed = verdictAskResultSchema.safeParse(body);
+    const { raw: filled, confidenceSource } = withDerivedConfidence(body);
+    const parsed = verdictAskResultSchema.safeParse(filled);
     if (!parsed.success) {
       throw new VerdictValidationError(`Provider response failed validation: ${parsed.error.message}`, parsed.error);
     }
     if (parsed.data.model !== req.model) {
       throw new VerdictValidationError(`Provider model echo mismatch: requested "${req.model}", got "${parsed.data.model}"`);
     }
-    return reportedCost ? { ...parsed.data, reportedCost } : parsed.data;
+    return reportedCost ? { ...parsed.data, confidenceSource, reportedCost } : { ...parsed.data, confidenceSource };
   }
 
   async listModels(): Promise<ModelCard[]> {
@@ -126,6 +128,11 @@ export class SystemOneProvider implements DecisionProvider {
       timeout: this.timeoutMs,
       fetch: this.wrapFetch(apiKey),
       retry: this.options.retry,
+      // SDK 0.7.0 zstd-compresses bodies over 1 KiB by default. Production
+      // traffic goes through `ctx.http.fetch`, whose worker bridge
+      // serializes a non-string body with `String(body)`, so a compressed
+      // body would reach the provider as garbage.
+      compression: false,
       logLevel: "off",
     });
   }

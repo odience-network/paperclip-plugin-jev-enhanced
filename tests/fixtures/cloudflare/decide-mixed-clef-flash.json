@@ -1,0 +1,85 @@
+{
+  "source": "recorded",
+  "recordedAt": "2026-11-11",
+  "provider": "cloudflare",
+  "model": "clef-flash",
+  "name": "decide-mixed-clef-flash",
+  "request": {
+    "method": "POST",
+    "path": "/client/v4/accounts/<account-id>/ai/run/@cf/cloudflare/clef-flash",
+    "body": {
+      "model": "clef-flash",
+      "state": "<state>",
+      "questions": {
+        "is_bug": {
+          "type": "noul",
+          "instructions": "Is this a bug report?"
+        },
+        "area": {
+          "type": "choice",
+          "instructions": "Which area is affected?",
+          "criteria": {
+            "frontend": "UI",
+            "backend": "Server or API",
+            "docs": null
+          }
+        },
+        "severity": {
+          "type": "score",
+          "instructions": "How severe is this?",
+          "criteria": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "result": {
+        "model": "clef-flash",
+        "answers": {
+          "is_bug": {
+            "type": "noul",
+            "noul": 0.808
+          },
+          "area": {
+            "type": "choice",
+            "choice": "backend",
+            "probabilities": {
+              "frontend": 0.0644,
+              "backend": 0.9293,
+              "docs": 0.0063
+            },
+            "confidence": 0.8018
+          },
+          "severity": {
+            "type": "score",
+            "score": 1.9121,
+            "legend": {
+              "0": "low",
+              "1": "medium",
+              "2": "high"
+            },
+            "probabilities": {
+              "0": 0.0112,
+              "1": 0.0654,
+              "2": 0.9234
+            },
+            "confidence": 0.7855
+          }
+        },
+        "usage": {
+          "input_tokens": 325,
+          "output_tokens": 0
+        }
+      },
+      "success": true,
+      "errors": [],
+      "messages": []
+    }
+  }
+}

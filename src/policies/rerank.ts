@@ -1,4 +1,5 @@
-import { noul, type Questions } from "@typesafe-ai/sdk";
+import { noul } from "@typesafe-ai/sdk";
+import type { DecisionQuestions } from "../decision/types.js";
 import type { FieldDecision, Policy, PolicyVerdict } from "./types.js";
 import { confidenceMarginFor } from "./util.js";
 
@@ -33,8 +34,8 @@ export const rerankPolicy: Policy<RerankState> = {
     return typeof state.query === "string" && state.query.trim().length > 0 && state.candidates.length > 0;
   },
 
-  questions(state): Questions {
-    const questions: Questions = {};
+  questions(state): DecisionQuestions {
+    const questions: DecisionQuestions = {};
     for (const candidate of state.candidates) {
       const id = candidate.id;
       questions[`relevant:${id}`] = noul(

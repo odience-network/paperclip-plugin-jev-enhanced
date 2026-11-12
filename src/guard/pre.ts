@@ -21,6 +21,21 @@ export interface GuardPreState {
   userRequestedHint?: boolean;
 }
 
+/** Reason code for a Pre/Post call on an MCP tool. Paperclip core's MCP tool
+ * gateway owns those calls (risk class, `allow | block | require_approval |
+ * rate_limit | trust_rule` policies, approval cards); VerdictGuard's scope is
+ * harness-native tools and `Stop`. See "Scope versus core's MCP tool gateway"
+ * in `ARCHITECTURE.md` and `docs/SECURITY.md`. */
+export const CORE_GOVERNED_TOOL_REASON = "governed-by-core-tool-gateway";
+
+/** Claude Code names every MCP tool `mcp__<server>__<tool>`. Defence in depth
+ * behind the hook matcher in `hooks/README.md`, which already excludes them:
+ * a `"*"` matcher left in an operator's `settings.json` must not make
+ * VerdictGuard second-guess core's verdict on the same call. */
+export function isCoreGovernedTool(toolName: string | undefined): boolean {
+  return typeof toolName === "string" && toolName.startsWith("mcp__");
+}
+
 const RISK_LEVELS = {
   "0": "No risk: a read-only or purely local, non-destructive action.",
   "1": "Low risk: a reversible local change with no secrets, network, or destructive scope.",
@@ -46,7 +61,7 @@ export const guardPrePolicy: Policy<GuardPreState> = {
   defaultMode: "shadow",
 
   preFilter(state): boolean {
-    return typeof state.toolName === "string" && state.toolName.length > 0;
+    return typeof state.toolName === "string" && state.toolName.length > 0 && !isCoreGovernedTool(state.toolName);
   },
 
   questions(state) {

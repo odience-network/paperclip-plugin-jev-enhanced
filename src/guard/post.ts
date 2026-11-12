@@ -1,6 +1,7 @@
 import { choice, noul } from "@typesafe-ai/sdk";
 import type { VerdictAnswer } from "../decision/types.js";
 import type { Policy, PolicyContext, PolicyVerdict } from "../policies/types.js";
+import { isCoreGovernedTool } from "./pre.js";
 import type { GuardDecision } from "./types.js";
 
 export interface GuardPostState {
@@ -25,7 +26,7 @@ export const guardPostPolicy: Policy<GuardPostState> = {
   defaultMode: "shadow",
 
   preFilter(state): boolean {
-    return typeof state.toolName === "string" && state.toolName.length > 0;
+    return typeof state.toolName === "string" && state.toolName.length > 0 && !isCoreGovernedTool(state.toolName);
   },
 
   questions(state) {

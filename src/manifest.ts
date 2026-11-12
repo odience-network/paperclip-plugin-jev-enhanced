@@ -3,6 +3,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 import { DEFAULT_TYPESAFE_MODEL } from "./decision/models.js";
+import { CLOUDFLARE_DISCLOSURE, OPENAI_DISCLOSURE } from "./decision/providers/disclosures.js";
 
 // Deliberately not `new URL("../skills/...", import.meta.url)`: Vite special-
 // cases that exact literal pattern as a static asset reference and rewrites
@@ -61,8 +62,8 @@ const manifest: PaperclipPluginManifestV1 = {
   instanceConfigSchema: {
     type: "object",
     description:
-      "Verdict sends the issue/state text you route through its policies to the configured decision provider (for example TypeSafe's hosted Jev model) " +
-      "(api.typesafe.ai) over HTTPS to evaluate those policies. No raw issue state or free text is ever stored " +
+      "Verdict sends the issue/state text you route through its policies to the configured decision provider " +
+      "(TypeSafe api.typesafe.ai, Cloudflare api.cloudflare.com, OpenAI api.openai.com, or a self-hosted server) over HTTPS to evaluate those policies. No raw issue state or free text is ever stored " +
       "in the Verdict ledger — only policy outcomes, scores, and usage metadata. Use redactionPatterns to strip " +
       "anything sensitive before it leaves this plugin.",
     properties: {
@@ -80,7 +81,8 @@ const manifest: PaperclipPluginManifestV1 = {
         title: "Model (deprecated)",
         description:
           `Pinned TypeSafe model version for the implicit "typesafe" provider (default ${DEFAULT_TYPESAFE_MODEL}). ` +
-          "Aliases such as \"jev-latest\" resolve to a pinned version before use.",
+          "Allowed: jev-1.13.0, jev-1.14.0 (shadow-only until it has thresholds of its own). " +
+          "Aliases (\"jev-latest\", \"latest\", \"jev-preview\") resolve to the pinned default before use.",
         "x-paperclip-advanced": true,
       },
       baseUrl: {
@@ -93,26 +95,38 @@ const manifest: PaperclipPluginManifestV1 = {
         type: "object",
         title: "Providers",
         description:
-          "Decision providers by alias. Each entry is { kind: \"systemone\", preset, apiKeyRef, model?, baseUrl?, " +
-          "path?, authStyle?, allowUnlistedModel? } or { kind: \"core\" }. Preset \"typesafe\" sends redacted state text to TypeSafe " +
-          "(api.typesafe.ai; zero data retention on enterprise plans). Presets \"perplexity\", \"openrouter\", " +
-          "\"decisions-api\" and \"kev\" (Opper, EU) send it to that hosted provider; \"ollama\", \"laya\" and \"von\" " +
-          "send it to your own server at baseUrl. Those seven are built from published docs and are not " +
-          "live-verified: policies on them stay in shadow until thresholds are calibrated for them. \"decisions-api\" " +
+          "Decision providers by alias. Kinds: " +
+          "{ kind: \"systemone\", preset, apiKeyRef, model?, baseUrl?, path?, authStyle?, allowUnlistedModel? }: preset \"typesafe\" " +
+          "sends redacted state text to TypeSafe (api.typesafe.ai; zero data retention on enterprise plans only). " +
+          "Presets \"perplexity\", \"openrouter\", \"decisions-api\" and \"kev\" (Opper, EU) send it to that hosted " +
+          "provider; \"ollama\", \"laya\" and \"von\" send it to your own server at baseUrl. Those seven are built " +
+          "from published docs and are not live-verified: policies on them stay in shadow until thresholds are " +
+          "calibrated for them. " +
+          "\"decisions-api\" " +
           "(34+ models, 8 questions max) needs a model id from its published catalog unless allowUnlistedModel is true. " +
           "Cloudflare clef and clef-flash rank 14th and 19th of 19 on Vals ClaimBench (2026-10-23): not a recommended " +
-          "default. \"core\" uses " +
-          "the host's own decision service where the host exposes one, holds no credential, and is billed by the host.",
+          "default. " +
+          "{ kind: \"cloudflare\", accountId, apiKeyRef, model: \"clef\" | \"clef-flash\" }: " +
+          `${CLOUDFLARE_DISCLOSURE} ` +
+          "{ kind: \"openai\", apiKeyRef, model? (default gpt-6-luna) }: " +
+          `${OPENAI_DISCLOSURE} ` +
+          "{ kind: \"core\" }: uses the host's own decision service where the host exposes one, holds no " +
+          "credential, and is billed by the host. Provider calls can only reach the hosts of configured providers. " +
+          "A baseUrl must be https: unless the provider sends no credential (authStyle \"none\").",
         additionalProperties: {
           type: "object",
           properties: {
-            kind: { type: "string", enum: ["systemone", "core"] },
+            kind: { type: "string", enum: ["systemone", "cloudflare", "openai", "core"] },
             preset: {
               type: "string",
               enum: ["typesafe", "perplexity", "openrouter", "decisions-api", "ollama", "laya", "von", "kev"],
               default: "typesafe",
             },
             apiKeyRef: { type: "string", format: "secret-ref" },
+            accountId: {
+              type: "string",
+              description: "cloudflare only: the 32-character Workers AI account id. Configuration, not a secret.",
+            },
             model: { type: "string" },
             baseUrl: { type: "string" },
             path: { type: "string" },
@@ -131,7 +145,10 @@ const manifest: PaperclipPluginManifestV1 = {
         type: "array",
         items: { type: "string" },
         title: "Shadow Providers",
-        description: "Providers to compare against the primary on live traffic (recorded only; wired in a later release).",
+        description: "Providers asked alongside each policy's primary on live traffic, for comparison only. Each is asked alone " +
+          "(never a fallback chain), recorded as a shadow-mode row under the primary's decision_group_id, and never " +
+          "applied or suggested. Costs count against the daily token budget. Not used by VerdictGuard hooks or the " +
+          "browser tool, which are latency-bound.",
         "x-paperclip-advanced": true,
       },
       timeoutMs: {

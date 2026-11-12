@@ -18,6 +18,11 @@ export interface EvalCase<TState = unknown> {
   latencyMs?: number;
   usage?: { input_tokens: number; output_tokens: number };
   costUsd?: number;
+  /** Who produced `recordedAnswers`: the provider alias and pinned model.
+   * Absent on the original simulated fixtures, which report as
+   * `simulated/recorded`. Calibration is grouped by these, never pooled. */
+  provider?: string;
+  model?: string;
 }
 
 export interface EvalResult {
@@ -29,6 +34,8 @@ export interface EvalResult {
   correct: boolean;
   latencyMs?: number;
   costUsd?: number;
+  /** `"<provider>/<model>"` of the case's answers. */
+  providerModel: string;
 }
 
 /**
