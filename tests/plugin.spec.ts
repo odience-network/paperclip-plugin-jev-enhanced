@@ -264,6 +264,29 @@ describe("plugin scaffold", () => {
     expect(fetched).toEqual([]);
   });
 
+  it("carries the Clef benchmark caveat into provider health", async () => {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: [...manifest.capabilities, "events.emit"],
+      config: {
+        providers: { agg: { kind: "systemone", preset: "decisions-api", apiKeyRef: { type: "secret_ref", secretId: "secret_1" }, model: "cloudflare/clef-flash" } },
+        defaultProvider: "agg",
+      },
+    });
+    harness.ctx.db = createFakeDb();
+    harness.ctx.secrets.resolve = async () => "sk-test";
+    const fetched: string[] = [];
+    harness.ctx.http.fetch = (async (input: string | URL | Request) => {
+      fetched.push(String(input));
+      throw new Error("no network in tests");
+    }) as typeof harness.ctx.http.fetch;
+    await plugin.definition.setup(harness.ctx);
+
+    const summary = await harness.getData<{ providerHealth: { caveat?: string } }>("dashboard-summary", { companyId: "company_1" });
+    expect(summary.providerHealth.caveat).toMatch(/19th.* of 19 on Vals ClaimBench/);
+    expect(fetched).toEqual([]);
+  });
+
   it("validateConfig degrades to a warning (not an error) when no API key is bound", async () => {
     const result = await plugin.definition.onValidateConfig?.({});
     expect(result?.ok).toBe(true);

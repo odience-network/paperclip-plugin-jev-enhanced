@@ -33,6 +33,7 @@ import {
 } from "./decision/registry.js";
 import { CORE_UNAVAILABLE_REASON } from "./decision/providers/core.js";
 import type { ProviderKind } from "./decision/provider.js";
+import { modelCaveat } from "./decision/providers/presets.js";
 import {
   acquireLease,
   getLatestDecision,
@@ -584,7 +585,7 @@ type ProviderHealth = (
   | { status: "unbound" }
   | { status: "unchecked" }
   | { status: "unreachable"; message: string }
-) & { verification?: "live" | "fixtures" };
+) & { verification?: "live" | "fixtures"; caveat?: string };
 
 /** One row of the health widget's provider list. */
 interface ProviderStatus {
@@ -645,7 +646,8 @@ async function checkProviderHealth(
       health = { status: "unreachable", message: error instanceof Error ? error.message : String(error) };
     }
   }
-  health = { ...health, verification: provider.verification };
+  const caveat = modelCaveat(provider.model);
+  health = { ...health, verification: provider.verification, ...(caveat ? { caveat } : {}) };
   providerHealthCache.set(key, { at: now, health });
   return health;
 }

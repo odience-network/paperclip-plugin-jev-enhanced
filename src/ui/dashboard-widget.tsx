@@ -42,6 +42,7 @@ export function DashboardWidget({ context }: PluginWidgetProps) {
         Provider health: {healthLabel(data.providerHealth)}
         {data.providerHealth.verification === "fixtures" ? " (not live-verified)" : ""}
       </div>
+      {data.providerHealth.caveat ? <div>{data.providerHealth.caveat}</div> : null}
       {data.providers.length > 0 && (
         <ul aria-label="Providers" style={{ margin: 0, paddingLeft: "1rem" }}>
           {data.providers.map((provider) => (

@@ -120,6 +120,26 @@ describe("DashboardWidget", () => {
     }
   });
 
+  it("shows the provider's benchmark caveat", async () => {
+    const { harness, uninstall } = await installUiTestBridge({ companyId: "company_1" });
+    try {
+      const original = harness.getData.bind(harness);
+      harness.getData = (async (key: string, params?: Record<string, unknown>) => {
+        const data = await original(key, params);
+        if (key !== "dashboard-summary") return data;
+        return {
+          ...(data as object),
+          providerHealth: { status: "unchecked", verification: "fixtures", caveat: "Clef: not a recommended default." },
+        };
+      }) as typeof harness.getData;
+
+      renderWidget("company_1");
+      await waitFor(() => expect(screen.getByText("Clef: not a recommended default.")).toBeTruthy());
+    } finally {
+      uninstall();
+    }
+  });
+
   it("shows populated decision counts, cost, agreement rate, and mode split", async () => {
     const { harness, uninstall } = await installUiTestBridge({ companyId: "company_1" });
     try {

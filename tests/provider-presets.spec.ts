@@ -5,7 +5,7 @@ import { parseVerdictConfig, policyConfigFor } from "../src/config.js";
 import { classifyError } from "../src/decision/errors.js";
 import { DecisionPipeline } from "../src/decision/pipeline.js";
 import type { DecisionProvider } from "../src/decision/provider.js";
-import { SYSTEMONE_PRESETS } from "../src/decision/providers/presets.js";
+import { modelCaveat, SYSTEMONE_PRESETS } from "../src/decision/providers/presets.js";
 import { buildProvider, providerBinding, validateProviderConfig } from "../src/decision/registry.js";
 import type { DecisionQuestions } from "../src/decision/types.js";
 import manifest from "../src/manifest.js";
@@ -169,8 +169,8 @@ describe.each(TIER_B)("L2 docs fixtures: %s", (preset) => {
     expect(fixture.path).toMatch(/^\//);
   });
 
-  it("decide.json replays through the preset: documented path, pinned model, valid answers", async () => {
-    const fixture = loadFixture(preset, "decide");
+  it.each(files.filter((name) => name.startsWith("decide")))("%s.json replays through the preset: documented path, pinned model, valid answers", async (name) => {
+    const fixture = loadFixture(preset, name);
     const outcome = await replay(preset, fixture);
 
     expect(server.requests).toHaveLength(1);
@@ -247,5 +247,133 @@ describe("L2 docs fixtures: preset-specific response variants", () => {
     const outcome = await replay("kev", loadFixture("kev", "decide"));
     expect(outcome.costUsd).toBeCloseTo((23 * 0.042) / 1_000_000, 12);
     expect(outcome.rateVersion).toBe("kev-opper-2026-09");
+  });
+});
+
+describe("decisions-api: model catalog", () => {
+  const preset = SYSTEMONE_PRESETS["decisions-api"];
+  const catalog = preset.modelCatalog!;
+  const pinned = catalog.ids.filter((id) => !id.startsWith("~"));
+
+  it("lists every vendor's ids, vendor-prefixed, with the date and URL they were read from", () => {
+    expect(catalog.url).toBe("https://decisions-api.dev/models");
+    expect(catalog.readOn).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(pinned.length).toBeGreaterThanOrEqual(32);
+    for (const id of catalog.ids) expect(id).toMatch(/^~?[a-z0-9-]+\/[a-z0-9.:-]+$/);
+    expect(catalog.ids).toEqual(
+      expect.arrayContaining([
+        "typesafe/jev-1.13",
+        "typesafe/jev-1.14",
+        "liquid/d1",
+        "liquid/d1.1",
+        "liquid/d1-ultra",
+        "inception/mercury-decide",
+        "microsoft/microsoft-decision-1",
+        "nace-ai/drex-v1.5",
+        "nace-ai/drex-v2.0",
+        "nace-ai/drex-max",
+        "upstage/solar-decide",
+        "upstage/solar-decide-flash",
+        "baseten/mammoth-1",
+        "baseten/elephant-1",
+        "baseten/joey-1",
+        "morph/reflex",
+        "respan/span-02",
+        "scaledown/classify-1",
+        "togethercomputer/tev1-4b-experimental",
+        "jaredpalmer/kev-4b",
+        "convaiinnovations/laya",
+        "perplexity/pplx-decider-v1.2",
+        "perplexity/pplx-decider-flash-v1.2",
+        "cloudflare/clef",
+        "cloudflare/clef-flash",
+        "openai/gpt-6-luna-decisions",
+      ]),
+    );
+    expect(preset.capabilities.maxQuestions).toBe(8);
+  });
+
+  it("pins every rolling ~alias to a listed id", () => {
+    for (const alias of catalog.ids.filter((id) => id.startsWith("~"))) {
+      expect(pinned).toContain(preset.modelAliases[alias]);
+    }
+    expect(providerFor("decisions-api", { model: "~typesafe/jev-latest" }).model).toBe("typesafe/jev-1.14");
+  });
+
+  it.each([
+    ["typesafe/jev-1.14", 600],
+    ["perplexity/pplx-decider-v1.2", 300],
+    ["openai/gpt-6-luna-decisions", 1_500],
+    ["cloudflare/clef", 3_500],
+  ])("prices %s at %i credits per 1M input tokens, output free", (model, credits) => {
+    const cost = preset.estimateCost!(model, { input_tokens: 1_000_000, output_tokens: 50_000 });
+    expect(cost.usd).toBeCloseTo(credits / 10_000, 12);
+    expect(cost.rateVersion).toBe("decisions-api-credits-2026-11-12");
+  });
+
+  it("rounds up to whole credits with a 1-credit minimum, and charges flat-rate models per request", () => {
+    expect(preset.estimateCost!("typesafe/jev-1.13", { input_tokens: 10, output_tokens: 0 }).usd).toBeCloseTo(0.0001, 12);
+    expect(preset.estimateCost!("typesafe/jev-1.13", { input_tokens: 1_666, output_tokens: 0 }).usd).toBeCloseTo(0.0001, 12);
+    expect(preset.estimateCost!("typesafe/jev-1.13", { input_tokens: 1_667, output_tokens: 0 }).usd).toBeCloseTo(0.0002, 12);
+    expect(preset.estimateCost!("respan/span-01-lite:free", { input_tokens: 500_000, output_tokens: 0 }).usd).toBeCloseTo(0.0001, 12);
+  });
+
+  it("costs an unlisted model at the highest listed rate", () => {
+    expect(preset.estimateCost!("newvendor/model-1", { input_tokens: 1_000_000, output_tokens: 0 }).usd).toBeCloseTo(0.35, 12);
+  });
+
+  it.each(["liquid", "inception", "microsoft", "nace", "upstage", "baseten"])(
+    "decide-%s.json: creditsUsed matches the catalog price, and is what the ledger records",
+    async (vendor) => {
+      const fixture = loadFixture("decisions-api", `decide-${vendor}`);
+      const { data } = fixture.response as { data: { creditsUsed: number; result: { usage: { input_tokens: number; output_tokens: number } } } };
+      const outcome = await replay("decisions-api", fixture);
+
+      expect(server.requests).toHaveLength(1);
+      expect(outcome.costUsd).toBeCloseTo(data.creditsUsed / 10_000, 12);
+      expect(outcome.rateVersion).toBe("decisions-api-credits");
+      expect(preset.estimateCost!(fixture.request!.model, data.result.usage).usd).toBeCloseTo(data.creditsUsed / 10_000, 12);
+      expect(outcome.result).not.toHaveProperty("elapsedMs");
+    },
+  );
+
+  it("rejects an unlisted model in validation and at build time, so a typo cannot route to another vendor", () => {
+    const config = parseVerdictConfig({
+      providers: { agg: { kind: "systemone", preset: "decisions-api", apiKeyRef: "ref", model: "liquid/d1-ulta" } },
+      defaultProvider: "agg",
+    });
+    expect(validateProviderConfig(config, {}).errors).toEqual([
+      'providers.agg: model "liquid/d1-ulta" is not in the decisions-api catalog (https://decisions-api.dev/models, read ' +
+        `${catalog.readOn}). Fix the id, or set allowUnlistedModel: true for a model added since.`,
+    ]);
+    expect(() => buildProvider("agg", config.providers.agg, { resolveSecret: async () => "k" })).toThrow(/not listed.*allowUnlistedModel/);
+  });
+
+  it("accepts an unlisted model with allowUnlistedModel, with a warning", () => {
+    const config = parseVerdictConfig({
+      providers: {
+        agg: { kind: "systemone", preset: "decisions-api", apiKeyRef: "ref", model: "newvendor/model-1", allowUnlistedModel: true },
+      },
+      defaultProvider: "agg",
+    });
+    const report = validateProviderConfig(config, {});
+    expect(report.errors).toEqual([]);
+    expect(report.warnings).toContain('providers.agg: model "newvendor/model-1" is not in the decisions-api catalog (https://decisions-api.dev/models).');
+    expect(buildProvider("agg", config.providers.agg, { resolveSecret: async () => "k" }).model).toBe("newvendor/model-1");
+  });
+
+  it("does not restrict models on presets without a catalog", () => {
+    const config = parseVerdictConfig({ providers: { local: { kind: "systemone", preset: "ollama", model: "anything:7b" } }, defaultProvider: "local" });
+    expect(validateProviderConfig(config, {}).errors).toEqual([]);
+  });
+});
+
+describe("modelCaveat", () => {
+  it.each(["clef", "clef-flash", "clef:latest", "cloudflare/clef", "cloudflare/clef-flash", "@cf/cloudflare/clef"])("flags %s", (model) => {
+    expect(modelCaveat(model)).toMatch(/14th.*19th.* of 19 on Vals ClaimBench \(2026-10-23\); not a recommended default/);
+  });
+
+  it.each(["cloudflare/clef-omni", "typesafe/jev-1.14", "laya"])("does not flag %s", (model) => {
+    expect(modelCaveat(model)).toBeUndefined();
   });
 });

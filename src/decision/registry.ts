@@ -82,6 +82,7 @@ export function buildProvider(id: string, providerConfig: ProviderConfig, runtim
         baseUrl: providerConfig.baseUrl,
         path: providerConfig.path,
         authStyle: providerConfig.authStyle,
+        allowUnlistedModel: providerConfig.allowUnlistedModel,
         resolveApiKey,
         ...http,
       });
@@ -295,6 +296,17 @@ export function validateProviderConfig(config: VerdictConfig, host: unknown): Pr
       }
       if (!preset.defaultModel && !providerConfig.model) errors.push(`providers.${id}: preset "${preset.name}" needs a model.`);
       if (!preset.baseUrl && !providerConfig.baseUrl) errors.push(`providers.${id}: preset "${preset.name}" needs a baseUrl.`);
+      const { modelCatalog } = preset;
+      if (modelCatalog && providerConfig.model && !modelCatalog.ids.includes(providerConfig.model)) {
+        if (providerConfig.allowUnlistedModel) {
+          warnings.push(`providers.${id}: model "${providerConfig.model}" is not in the ${preset.name} catalog (${modelCatalog.url}).`);
+        } else {
+          errors.push(
+            `providers.${id}: model "${providerConfig.model}" is not in the ${preset.name} catalog (${modelCatalog.url}, ` +
+              `read ${modelCatalog.readOn}). Fix the id, or set allowUnlistedModel: true for a model added since.`,
+          );
+        }
+      }
       if (preset.pinnedModels && providerConfig.model && callsPresetHost(providerConfig.baseUrl, preset.baseUrl)) {
         const requested = providerConfig.model.trim();
         const model = preset.modelAliases[requested] ?? requested;

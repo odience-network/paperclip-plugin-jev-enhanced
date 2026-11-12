@@ -1,0 +1,50 @@
+{
+  "source": "docs",
+  "docsUrl": "https://decisions-api.dev/docs",
+  "notes": "Docs-derived, not a recorded response. Envelope and result shape from the illustrative response on https://decisions-api.dev/docs; model id, question types and price from the model card on https://decisions-api.dev/models (read 2026-11-12). Answer values are illustrative. creditsUsed is max(1, ceil(input_tokens x 720 / 1M)) for this model.",
+  "path": "/v1/systemone",
+  "request": {
+    "model": "upstage/solar-decide-flash",
+    "state": "Customer writes: I cannot log in since I changed my email address yesterday.",
+    "questions": {
+      "route": {
+        "type": "choice",
+        "instructions": "Which team should handle this?",
+        "criteria": {
+          "account": "Login, identity and profile",
+          "billing": "Payments and refunds",
+          "other": "None of these teams"
+        }
+      }
+    }
+  },
+  "response": {
+    "code": 0,
+    "message": "ok",
+    "data": {
+      "requestId": "req_example_upstage",
+      "creditsUsed": 2,
+      "historySaved": true,
+      "result": {
+        "model": "upstage/solar-decide-flash",
+        "answers": {
+          "route": {
+            "type": "choice",
+            "choice": "account",
+            "probabilities": {
+              "account": 0.93,
+              "billing": 0.02,
+              "other": 0.05
+            },
+            "confidence": 0.86
+          }
+        },
+        "usage": {
+          "input_tokens": 1500,
+          "output_tokens": 0
+        },
+        "elapsedMs": 250
+      }
+    }
+  }
+}

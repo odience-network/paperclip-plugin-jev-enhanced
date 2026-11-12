@@ -16,6 +16,8 @@ export interface SystemOneProviderOptions {
   baseUrl?: string;
   path?: string;
   authStyle?: SystemOneAuthStyle;
+  /** Accepts a `model` outside the preset's `modelCatalog`. */
+  allowUnlistedModel?: boolean;
   /** Resolves the API key at call time. MUST wrap `ctx.secrets.resolve` —
    * never a `process.env` lookup — and its result must never be cached or
    * logged. Not called when `authStyle` is `"none"`. */
@@ -55,6 +57,12 @@ export class SystemOneProvider implements DecisionProvider {
     this.preset = preset.name;
     this.model = preset.modelAliases[requested] ?? requested;
     if (!this.model) throw new Error(`SystemOne provider "${options.id}": preset "${preset.name}" has no default model; set model`);
+    if (preset.modelCatalog && !options.allowUnlistedModel && !preset.modelCatalog.ids.includes(requested)) {
+      throw new Error(
+        `SystemOne provider "${options.id}": model "${requested}" is not listed for preset "${preset.name}"; ` +
+          "fix the id or set allowUnlistedModel",
+      );
+    }
     this.capabilities = preset.capabilities;
     this.verification = preset.verification;
     this.baseUrl = (options.baseUrl ?? preset.baseUrl).replace(/\/+$/, "");
@@ -64,7 +72,10 @@ export class SystemOneProvider implements DecisionProvider {
     this.authStyle = options.authStyle ?? preset.authStyle;
     this.timeoutMs = options.timeoutMs ?? 10_000;
     const card = preset.rateCard ? RATE_CARDS[preset.rateCard] : undefined;
-    if (card && preset.capabilities.billing === "plugin") {
+    const { estimateCost } = preset;
+    if (estimateCost && preset.capabilities.billing === "plugin") {
+      this.estimateCostUsd = (usage) => estimateCost(this.model, usage);
+    } else if (card && preset.capabilities.billing === "plugin") {
       this.estimateCostUsd = (usage) => estimateCostFromCard(card, this.model, usage);
     }
   }

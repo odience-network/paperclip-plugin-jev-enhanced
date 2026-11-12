@@ -22,8 +22,8 @@ per company and can be overridden per policy, with fallback chains. See
 | Paperclip core | `core` (feature-detected, unavailable on released hosts) | host-chosen | fixtures |
 | Perplexity Decisions | `systemone` / `perplexity` | `pplx-decider-v1-27b` | not live-verified |
 | OpenRouter (alpha decisions) | `systemone` / `openrouter` | `typesafe/jev-1.13` | not live-verified |
-| decisions-api.dev | `systemone` / `decisions-api` | none: set `model` | not live-verified |
-| Ollama (Clef) | `systemone` / `ollama` | `clef` (or `clef-flash`) | not live-verified |
+| decisions-api.dev | `systemone` / `decisions-api` | none: set `model` (34+ models, fixtures only, 8 questions max) | not live-verified |
+| Ollama (Clef) | `systemone` / `ollama` | `clef` (or `clef-flash`)¹ | not live-verified |
 | Laya (community server) | `systemone` / `laya` | `laya`; set `baseUrl` | not live-verified |
 | von | `systemone` / `von` | `von-1.3.0` | not live-verified |
 | Kev (Opper, EU) | `systemone` / `kev` | `opper/kev-4b` | not live-verified |
@@ -34,6 +34,12 @@ per company and can be overridden per policy, with fallback chains. See
 "fixtures" means contract tests and recorded or docs-derived fixtures only.
 "not live-verified" (the Tier B presets) means contract tests and
 docs-derived fixtures only; see below.
+
+¹ Cloudflare `clef` and `clef-flash` (on Workers AI, Ollama or
+decisions-api.dev): live-verified on Workers AI and kept because the board
+holds a token, but ranked 14th and 19th of 19 on Vals ClaimBench (2026-10-23),
+so not a recommended default. The dashboard repeats this next to provider
+health when the default provider runs either model.
 
 Tier B presets ship no thresholds: run the eval dataset (`pnpm eval`) on the
 provider when you have access and set `policies.<name>.thresholds["<alias>/<model>"]`.
@@ -52,11 +58,48 @@ against the mock server, and replays the docs-derived fixtures in
 |---|---|---|---|
 | `perplexity` | `POST https://api.perplexity.ai/v1/decisions` | Bearer | Reference caps (not published). Images accepted in Perplexity's own format; flag reserved. No published price, cost recorded as 0. |
 | `openrouter` | `POST https://openrouter.ai/api/alpha/decisions` | Bearer | Jev caps. Cost is the response's `usage.cost` (credits = USD; BYOK: fee only), not a rate card. Dated model echo (`…-20260917`) is mapped to the pin; a `refusal` answer fails the decision. |
-| `decisions-api` | `POST https://decisions-api.dev/v1/systemone` | Bearer | Max 8 questions. Response envelope `{code, data: {result, creditsUsed}}` is unwrapped; `code != 0` fails. Cost is `creditsUsed / 10,000` USD. |
+| `decisions-api` | `POST https://decisions-api.dev/v1/systemone` | Bearer | 34+ models, fixtures only, 8 questions max (32 KiB of text and questions). `model` must be an id from the catalog below unless `allowUnlistedModel: true`. Response envelope `{code, data: {result, creditsUsed}}` is unwrapped; `code != 0` fails. Cost is `creditsUsed / 10,000` USD, else estimated from the catalog price. |
 | `ollama` | `POST http://localhost:11434/v1/systemone` | none | 64 questions, 26 options, 10 levels (local). Ollama 0.35.1+. Models from `GET /api/tags`. |
 | `laya` | `POST <baseUrl>/v1/systemone` | none | 20 options (quality collapses above). Confidence derived: 1 − normalised entropy; overconfident until calibrated. |
 | `von` | `POST http://localhost:8000/v1/systemone` | none (bearer if `VON_API_KEY`) | Confidence derived from a calibration map (`von calibrate` refits it). Banded `noul` is replaced by `noul_raw`, the calibrated posterior. English only; repo archived. |
 | `kev` | `POST https://api.opper.ai/v3/compat/v1/systemone` | Bearer | EU-hosted. `noul` and `choice` only. $0.042 / 1M input tokens. For a self-hosted `kev-onnx` server set `baseUrl` and `authStyle: "none"`. |
+
+#### decisions-api.dev model catalog
+
+Read 2026-11-12 from <https://decisions-api.dev/models>. One endpoint, the
+model id picks the upstream vendor, so config validation rejects an id that is
+not listed here (a typo would otherwise route state text to a different
+vendor); set `allowUnlistedModel: true` on the provider for a model added
+since. Credits are per 1M input tokens, output free,
+`max(1, ceil(input_tokens × rate / 1M))` per request, $1 = 10,000 credits.
+
+| Vendor | Model ids | Credits / 1M input |
+|---|---|---|
+| TypeSafe | `typesafe/jev-1.13`, `typesafe/jev-1.14` | 600 |
+| Liquid | `liquid/d1`, `liquid/d1.1`, `liquid/d1-ultra` | 600, 300, 600 |
+| Inception | `inception/mercury-decide`, `inception/mercury-decide:free` | 300, flat 1 / request |
+| Microsoft | `microsoft/microsoft-decision-1` | 600 |
+| Nace.AI | `nace-ai/drex-v1.5`, `nace-ai/drex-v2.0`, `nace-ai/drex-max` | 600, 900, 900 |
+| Upstage | `upstage/solar-decide`, `upstage/solar-decide-flash` | 720 |
+| Baseten | `baseten/mammoth-1`, `baseten/elephant-1`, `baseten/joey-1` | 1,500, 500, 200 |
+| Morph | `morph/reflex` | 600 |
+| Respan | `respan/span-02`, `respan/span-01`, `respan/span-01-lite`, `respan/span-01-lite:free` | 200, 300, flat 1, flat 1 |
+| ScaleDown | `scaledown/classify-1` | 720 |
+| Together | `togethercomputer/tev1-4b-experimental` | 600 |
+| Kev | `jaredpalmer/kev-4b` | 600 |
+| Laya | `convaiinnovations/laya`, `convaiinnovations/laya-free` | flat 1 |
+| Perplexity | `perplexity/pplx-decider-v1.2`, `perplexity/pplx-decider-flash-v1.2` | 300, 200 |
+| Cloudflare¹ | `cloudflare/clef`, `cloudflare/clef-flash`, `cloudflare/clef-omni` | 3,500, 600, 2,200 |
+| OpenAI | `openai/gpt-6-luna-decisions` | 1,500 |
+
+Rolling aliases are pinned before the call so thresholds stay on one
+version: `~typesafe/jev-latest` → `jev-1.14`, `~liquid/d1-latest` → `d1.1`,
+`~liquid/d1-ultra-latest` → `d1-ultra`, `~perplexity/pplx-decider-latest` and
+`-flash-latest` → the v1.2 models. Where the price table and a model card
+disagree (Drex v2.0, Drex Max, Classify-1) the higher price is used; an
+unlisted model is estimated at 3,500. Docs-derived fixtures for Liquid,
+Inception, Microsoft, Nace, Upstage and Baseten are in
+`tests/fixtures/decisions-api/`.
 
 Presets without a documented models endpoint are not pinged by the health
 check (any other request would cost money); the dashboard shows them as
