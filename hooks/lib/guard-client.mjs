@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 /**
  * Shared transport for Claude Code harness hooks calling VerdictGuard's
- * `POST /plugins/odience.verdict/api/guard/evaluate`. Kept dependency-free
+ * `POST /api/plugins/odience.verdict/api/guard/evaluate`. Kept dependency-free
  * (built-in `fetch`/`crypto` only, Node >=18) so hook scripts run without an
  * install step inside the coding agent's own sandbox.
  */
@@ -18,6 +18,7 @@ export const ENV = {
   disabled: "PAPERCLIP_GUARD_DISABLED",
 };
 
+const GUARD_EVALUATE_PATH = "/api/plugins/odience.verdict/api/guard/evaluate";
 const DEFAULT_TIMEOUT_MS = 2_000; // above the plugin's default 1500ms budget
 const MAX_EXCERPT_LENGTH = 4_000; // matches guardEvaluateRequestSchema's excerpt cap
 
@@ -71,6 +72,17 @@ export function readHarnessEnv() {
 }
 
 /**
+ * Builds the guard/evaluate URL. Plugin routes are mounted under the host's
+ * `/api` router, so the path always starts with `/api/plugins/...`.
+ * `PAPERCLIP_API_URL` may be the bare origin or already end in `/api`; strip a
+ * trailing `/`, then a trailing `/api`, so both shapes resolve the same way.
+ */
+export function guardEvaluateUrl(apiUrl) {
+  const origin = apiUrl.replace(/\/+$/, "").replace(/\/api$/, "");
+  return `${origin}${GUARD_EVALUATE_PATH}`;
+}
+
+/**
  * Calls `guard/evaluate`. On any transport-level failure (network error,
  * malformed JSON, or the client-side timeout) this never throws: it returns
  * the configured fallback decision instead, because a harness script that
@@ -94,7 +106,7 @@ export async function evaluateGuard(env, body) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), env.timeoutMs);
   try {
-    const res = await fetch(`${env.apiUrl.replace(/\/$/, "")}/plugins/odience.verdict/api/guard/evaluate`, {
+    const res = await fetch(guardEvaluateUrl(env.apiUrl), {
       method: "POST",
       headers: {
         "content-type": "application/json",

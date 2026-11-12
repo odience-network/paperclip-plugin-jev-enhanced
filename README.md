@@ -460,7 +460,7 @@ while (!done) {
 ## Hook install
 
 VerdictGuard ships Claude Code `PreToolUse`/`PostToolUse`/`Stop` hooks in
-`hooks/` that call `POST /plugins/odience.verdict/api/guard/evaluate`. See
+`hooks/` that call `POST /api/plugins/odience.verdict/api/guard/evaluate`. See
 `hooks/README.md` for installation and environment variables, and
 `docs/SECURITY.md` for the threat model.
 
