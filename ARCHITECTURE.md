@@ -383,6 +383,31 @@ implementations, not by a generic framework guard — each `apply` handler and
 each policy's `decide()` is small and reviewable specifically because of
 this.
 
+### Events > comment origin (fast-response receipts)
+
+Core's *fast responses* (paperclipai/paperclip #15748, off by default) post a
+one-sentence acknowledgement as an ordinary comment attributed to the
+assigned agent whenever a human comments. It carries a server-owned
+`IssueComment.origin = "fast_response"` and is logged as
+`issue.comment_added`, so it reaches the worker as `issue.comment.created`
+like any other agent comment.
+
+Every comment reader in the plugin applies one rule,
+`isFastResponseReceipt()` in `src/policies/util.ts`: a receipt is never
+classified, never fed to a provider, and never treated as a run's own
+claim. `commentOriginOf()` reads the field and maps a missing `origin` (older
+cores) to `"comment"`.
+
+- `comment-triage`: `buildCommentTriageState` copies the origin onto
+  `CommentTriageState.origin`, and `preFilter` returns `false` for a receipt
+  — outcome `skipped`, no provider call, no ledger row, no
+  `comment.classified` event, no wakeup.
+- `run-outcome-qa`: `buildRunOutcomeQaState` drops receipts before picking
+  the run's final comment by `createdByRunId`.
+
+The suggest and apply paths and the UI feeds read only ledger rows, never
+host comments, so a skipped receipt never reaches them.
+
 ### Policies > `issue-triage`
 
 `src/policies/issue-triage.ts`. Triggered by `issue.created`, `issue.updated`
@@ -525,8 +550,9 @@ question) always reports as the higher-priority verdict.
 
 `preFilter` skips: comments the plugin itself authored (`isPluginOrigin`);
 re-triage where the computed state hash matches the prior decision's hash;
-and comments authored by `authorType: "system"` (nothing a human or agent
-said, so nothing to triage).
+comments authored by `authorType: "system"` (nothing a human or agent
+said, so nothing to triage); and core's fast-response receipts
+(`origin: "fast_response"`, see "Events > comment origin").
 
 Mode semantics for `wakeupAssignee` once the gate clears:
 - **shadow**: ledger row only, `outcome: "observed"`.
