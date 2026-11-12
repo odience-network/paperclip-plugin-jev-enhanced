@@ -430,6 +430,31 @@ implementations, not by a generic framework guard — each `apply` handler and
 each policy's `decide()` is small and reviewable specifically because of
 this.
 
+### Events > comment origin (fast-response receipts)
+
+Core's *fast responses* (paperclipai/paperclip #15748, off by default) post a
+one-sentence acknowledgement as an ordinary comment attributed to the
+assigned agent whenever a human comments. It carries a server-owned
+`IssueComment.origin = "fast_response"` and is logged as
+`issue.comment_added`, so it reaches the worker as `issue.comment.created`
+like any other agent comment.
+
+Every comment reader in the plugin applies one rule,
+`isFastResponseReceipt()` in `src/policies/util.ts`: a receipt is never
+classified, never fed to a provider, and never treated as a run's own
+claim. `commentOriginOf()` reads the field and maps a missing `origin` (older
+cores) to `"comment"`.
+
+- `comment-triage`: `buildCommentTriageState` copies the origin onto
+  `CommentTriageState.origin`, and `preFilter` returns `false` for a receipt
+  — outcome `skipped`, no provider call, no ledger row, no
+  `comment.classified` event, no wakeup.
+- `run-outcome-qa`: `buildRunOutcomeQaState` drops receipts before picking
+  the run's final comment by `createdByRunId`.
+
+The suggest and apply paths and the UI feeds read only ledger rows, never
+host comments, so a skipped receipt never reaches them.
+
 ### Policies > `issue-triage`
 
 `src/policies/issue-triage.ts`. Triggered by `issue.created`, `issue.updated`
@@ -572,8 +597,9 @@ question) always reports as the higher-priority verdict.
 
 `preFilter` skips: comments the plugin itself authored (`isPluginOrigin`);
 re-triage where the computed state hash matches the prior decision's hash;
-and comments authored by `authorType: "system"` (nothing a human or agent
-said, so nothing to triage).
+comments authored by `authorType: "system"` (nothing a human or agent
+said, so nothing to triage); and core's fast-response receipts
+(`origin: "fast_response"`, see "Events > comment origin").
 
 Mode semantics for `wakeupAssignee` once the gate clears:
 - **shadow**: ledger row only, `outcome: "observed"`.
@@ -757,6 +783,34 @@ both of which are torn down with the plugin). The `verdict_decisions`/
 `verdict_feedback` tables and their namespace are untouched by a disable, so
 historical data survives a disable/re-enable cycle; a full uninstall drops
 the namespace per the host's normal plugin-uninstall data-retention policy.
+
+## Scope versus core's MCP tool gateway
+
+VerdictGuard (`src/guard/`, `hooks/`) covers harness-native tools (Bash,
+Edit, Write, browser actions driven through them) and the `Stop` event. MCP
+tools belong to Paperclip core's tool gateway, which applies its own risk
+classes, `allow | block | require_approval | rate_limit | trust_rule`
+policies and approval cards. VerdictGuard stays off them at two layers:
+
+- The hook matcher in `hooks/README.md` is `^(?!mcp__).*`.
+- `evaluateGuard` checks `isCoreGovernedTool(toolName)` (`src/guard/pre.ts`)
+  before any rail. For `PreToolUse`/`PostToolUse` on an `mcp__*` tool it
+  returns `allow` with reason `governed-by-core-tool-gateway`, and writes
+  one `rails-only` ledger row with outcome `applied`. It makes no provider
+  call. The `guard-pre`/`guard-post` `preFilter`s also reject these tools.
+
+The verdicts map one to one: `allow` → `allow`, `deny` → `deny` (core's
+`block` policy), `ask` → `require_approval`. The two surfaces differ: `ask`
+is a harness permission prompt, while `require_approval` is a board approval
+card.
+
+If both layers evaluated an MCP call, VerdictGuard could override a core
+trust rule, or add a second prompt next to core's card. The residual risk is
+a capability reachable both ways, e.g. Paperclip API writes via Bash `curl`
+or the Paperclip MCP tool. Each layer sees only its own path, so operators
+should mirror core's destructive-tool policies in the `guard-pre`
+thresholds and `blockedTools` for the native equivalents. `docs/SECURITY.md`
+has the full write-up under the same heading.
 
 ## Security posture
 

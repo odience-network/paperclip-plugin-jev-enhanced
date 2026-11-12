@@ -14,6 +14,75 @@ agent's own operator controls (see "Excessive agency" below). Treat it as
 defense-in-depth alongside, not instead of, least-privilege tool/permission
 configuration.
 
+## Scope versus core's MCP tool gateway
+
+Paperclip core governs MCP tool calls itself. Its tool gateway assigns each
+call a risk class and applies the company's `allow | block | require_approval |
+rate_limit | trust_rule` policies. When a call needs a human, it raises an
+approval card. VerdictGuard stays out of that path.
+
+**Scope.** VerdictGuard evaluates harness-native tools only (Bash, Edit,
+Write, browser actions driven through them) plus the `Stop` event. MCP tools
+(`mcp__<server>__<tool>`) belong to core. This is enforced at two layers:
+
+1. The documented hook matcher (`hooks/README.md`) is `^(?!mcp__).*`, so
+   Claude Code never calls the hook for an MCP tool.
+2. If a hook does call `guard/evaluate` for one anyway (say a `"*"` matcher
+   left in an old `settings.json`), `evaluateGuard` returns `allow` with
+   reason `governed-by-core-tool-gateway` and writes one `rails-only` ledger
+   row. It makes no provider call. The check runs before every rail, so the
+   kill switch, `blockedTools` and the loop guard don't apply to MCP tools
+   either. To block an MCP tool, use a core `block` policy; an `mcp__*` entry
+   in `blockedTools` has no effect.
+
+**Verdict mapping.** When a capability is reachable both ways, the two layers
+use the same three outcomes:
+
+| VerdictGuard (`PreToolUse`) | Core tool gateway | Meaning |
+|---|---|---|
+| `allow` | `allow` | Runs without a prompt |
+| `deny` | `deny` (from a `block` policy) | Doesn't run |
+| `ask` | `require_approval` | Needs a human first |
+
+The surfaces differ. Core's `require_approval` raises a Paperclip approval
+card that a board user can answer from anywhere. VerdictGuard's `ask` is a
+Claude Code permission prompt in the harness, so in a headless run nobody
+sees it. Use the override stamp (below) when a native call needs a
+board-visible approval.
+
+**Why not both on MCP calls.** If both layers evaluated the same MCP call:
+
+- If core said `allow` (for example, from a trust rule) and VerdictGuard said
+  `deny` or `ask`, VerdictGuard would silently override the operator's core
+  trust rule. In a headless run its `ask` would also stall the run, with no
+  card to answer.
+- If core said `require_approval` and VerdictGuard said `ask`, the human would
+  get two prompts on two surfaces for one call.
+
+**Residual risk: one capability, two paths.** Some capabilities are reachable
+both natively and over MCP:
+
+- Paperclip API writes: `Bash` running `curl "$PAPERCLIP_API_URL/api/..."`, or
+  the Paperclip MCP tool.
+- Browser actions: Bash/Playwright, or a browser MCP server.
+- Files, HTTP or git: native tools, or a filesystem, fetch or git MCP server.
+
+Core's `destructive` risk class and `require_approval` policies apply only to
+the MCP path. VerdictGuard's thresholds apply only to the native path. An
+agent blocked or held for approval on one path can try the other. Neither
+layer can see this on its own, so the operator has to keep the two
+configurations in step:
+
+- For every core tool policy that blocks or holds a destructive MCP tool,
+  tune `guard-pre` for its native equivalent to at least match. Use
+  `blockedTools` for whole tools, and lower `riskAskMin`/`destructiveDenyMin`
+  where a native tool can reach the same system, e.g. Bash with
+  Paperclip API credentials in scope. Do this before promoting `guard-pre`
+  out of `shadow`, and again each time core tool policies change.
+- Where possible, remove the native path rather than guarding it. If agents
+  should write to Paperclip only through the MCP tool, don't put a
+  write-capable API key in their shell environment.
+
 ## Threat: injection via issue text or tool output
 
 Issue titles/descriptions and fetched tool output are attacker-reachable
@@ -167,7 +236,9 @@ VerdictGuard can independently verify.
 
 These are deterministic rails evaluated **before** any provider call
 (`runRails` in `src/guard/rails.ts`), in a fixed order: kill switch →
-blocklist → override stamp → allowlist → read-only-tools → loop guard. An
+blocklist → override stamp → allowlist → read-only-tools → loop guard. The
+MCP scope check (see "Scope versus core's MCP tool gateway") runs before all
+of them, so none of the rails applies to `mcp__*` tools. An
 attacker who can influence the provider's answers (e.g. via a crafted prompt
 injection aimed at the provider, not just the agent) still cannot bypass
 these — they never reach provider-dependent logic at all. `killSwitch: "deny-all"`
