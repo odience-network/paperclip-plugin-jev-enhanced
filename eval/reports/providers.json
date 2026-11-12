@@ -1,0 +1,272 @@
+{
+  "generatedFrom": [
+    "eval/datasets/live/issue-triage.ledger.jsonl",
+    "eval/datasets/live/comment-triage.ledger.jsonl"
+  ],
+  "rule": {
+    "minPrecision": 0.9,
+    "minCleared": 10
+  },
+  "policies": {
+    "issue-triage": {
+      "datasetSize": 60,
+      "groups": 55,
+      "providers": [
+        {
+          "providerModel": "typesafe/jev-1.13.0",
+          "provider": "typesafe",
+          "model": "jev-1.13.0",
+          "rows": 55,
+          "answered": 55,
+          "availability": 1,
+          "errorsByClass": {},
+          "skipped": 0,
+          "fallbacks": 0,
+          "agreement": null,
+          "verdictAgreement": null,
+          "p50LatencyMs": 155,
+          "costPer1kUsd": 0.8556090909090912,
+          "labelled": 55,
+          "accuracy": 0.43636363636363634,
+          "ece": 0.20000000000000004,
+          "recommended": null,
+          "defaultsKey": "typesafe/jev-1.13.0"
+        },
+        {
+          "providerModel": "typesafe-114/jev-1.14.0",
+          "provider": "typesafe-114",
+          "model": "jev-1.14.0",
+          "rows": 55,
+          "answered": 55,
+          "availability": 1,
+          "errorsByClass": {},
+          "skipped": 0,
+          "fallbacks": 0,
+          "agreement": 0.8118556701030928,
+          "verdictAgreement": 0.8363636363636363,
+          "p50LatencyMs": 151,
+          "costPer1kUsd": 0.855636363636364,
+          "labelled": 55,
+          "accuracy": 0.43636363636363634,
+          "ece": 0.1629090909090909,
+          "recommended": null,
+          "defaultsKey": "typesafe/jev-1.14.0"
+        },
+        {
+          "providerModel": "cf-clef/clef",
+          "provider": "cf-clef",
+          "model": "clef",
+          "rows": 55,
+          "answered": 55,
+          "availability": 1,
+          "errorsByClass": {},
+          "skipped": 0,
+          "fallbacks": 0,
+          "agreement": 0.6984536082474226,
+          "verdictAgreement": 0.8181818181818182,
+          "p50LatencyMs": 329,
+          "costPer1kUsd": 0.25959272727272736,
+          "labelled": 55,
+          "accuracy": 0.38181818181818183,
+          "ece": 0.08721636363636363,
+          "recommended": null,
+          "defaultsKey": "cloudflare/clef"
+        },
+        {
+          "providerModel": "cf-clef-flash/clef-flash",
+          "provider": "cf-clef-flash",
+          "model": "clef-flash",
+          "rows": 55,
+          "answered": 55,
+          "availability": 1,
+          "errorsByClass": {},
+          "skipped": 0,
+          "fallbacks": 0,
+          "agreement": 0.6649484536082474,
+          "verdictAgreement": 0.6545454545454545,
+          "p50LatencyMs": 135,
+          "costPer1kUsd": 0.0411021818181818,
+          "labelled": 55,
+          "accuracy": 0.4,
+          "ece": 0.2708709090909091,
+          "recommended": null,
+          "defaultsKey": "cloudflare/clef-flash"
+        },
+        {
+          "providerModel": "openai/gpt-6-luna",
+          "provider": "openai",
+          "model": "gpt-6-luna",
+          "rows": 55,
+          "answered": 55,
+          "availability": 1,
+          "errorsByClass": {},
+          "skipped": 0,
+          "fallbacks": 0,
+          "agreement": 0.7087628865979382,
+          "verdictAgreement": 0.6727272727272727,
+          "p50LatencyMs": 196,
+          "costPer1kUsd": 0.1299163636363637,
+          "labelled": 55,
+          "accuracy": 0.43636363636363634,
+          "ece": 0.2932727272727273,
+          "recommended": null,
+          "defaultsKey": "openai/gpt-6-luna"
+        }
+      ]
+    },
+    "comment-triage": {
+      "datasetSize": 52,
+      "groups": 52,
+      "providers": [
+        {
+          "providerModel": "typesafe/jev-1.13.0",
+          "provider": "typesafe",
+          "model": "jev-1.13.0",
+          "rows": 52,
+          "answered": 52,
+          "availability": 1,
+          "errorsByClass": {},
+          "skipped": 0,
+          "fallbacks": 0,
+          "agreement": null,
+          "verdictAgreement": null,
+          "p50LatencyMs": 152,
+          "costPer1kUsd": 0.4115096153846154,
+          "labelled": 52,
+          "accuracy": 0.7884615384615384,
+          "ece": 0.11519230769230782,
+          "recommended": {
+            "confidenceMin": 0.95,
+            "marginMin": 0.3,
+            "coverage": 0.4807692307692308,
+            "precision": 0.96
+          },
+          "defaultsKey": "typesafe/jev-1.13.0"
+        },
+        {
+          "providerModel": "typesafe-114/jev-1.14.0",
+          "provider": "typesafe-114",
+          "model": "jev-1.14.0",
+          "rows": 52,
+          "answered": 52,
+          "availability": 1,
+          "errorsByClass": {},
+          "skipped": 0,
+          "fallbacks": 0,
+          "agreement": 0.8115384615384615,
+          "verdictAgreement": 1,
+          "p50LatencyMs": 152.5,
+          "costPer1kUsd": 0.4115096153846154,
+          "labelled": 52,
+          "accuracy": 0.7884615384615384,
+          "ece": 0.10750000000000032,
+          "recommended": {
+            "confidenceMin": 0.95,
+            "marginMin": 0.3,
+            "coverage": 0.36538461538461536,
+            "precision": 1
+          },
+          "defaultsKey": "typesafe/jev-1.14.0"
+        },
+        {
+          "providerModel": "cf-clef/clef",
+          "provider": "cf-clef",
+          "model": "clef",
+          "rows": 52,
+          "answered": 52,
+          "availability": 1,
+          "errorsByClass": {},
+          "skipped": 0,
+          "fallbacks": 0,
+          "agreement": 0.7653846153846153,
+          "verdictAgreement": 0.8076923076923077,
+          "p50LatencyMs": 340.5,
+          "costPer1kUsd": 0.15411230769230763,
+          "labelled": 52,
+          "accuracy": 0.9615384615384616,
+          "ece": 0.025584615384615428,
+          "recommended": {
+            "confidenceMin": 0.75,
+            "marginMin": 0.3,
+            "coverage": 1,
+            "precision": 0.9615384615384616
+          },
+          "defaultsKey": "cloudflare/clef"
+        },
+        {
+          "providerModel": "cf-clef-flash/clef-flash",
+          "provider": "cf-clef-flash",
+          "model": "clef-flash",
+          "rows": 52,
+          "answered": 52,
+          "availability": 1,
+          "errorsByClass": {},
+          "skipped": 0,
+          "fallbacks": 0,
+          "agreement": 0.7653846153846153,
+          "verdictAgreement": 0.9423076923076923,
+          "p50LatencyMs": 118,
+          "costPer1kUsd": 0.024401115384615382,
+          "labelled": 52,
+          "accuracy": 0.75,
+          "ece": 0.24988076923076918,
+          "recommended": null,
+          "defaultsKey": "cloudflare/clef-flash"
+        },
+        {
+          "providerModel": "openai/gpt-6-luna",
+          "provider": "openai",
+          "model": "gpt-6-luna",
+          "rows": 52,
+          "answered": 52,
+          "availability": 1,
+          "errorsByClass": {},
+          "skipped": 0,
+          "fallbacks": 0,
+          "agreement": 0.7769230769230769,
+          "verdictAgreement": 0.8269230769230769,
+          "p50LatencyMs": 180,
+          "costPer1kUsd": 0.0877980769230769,
+          "labelled": 52,
+          "accuracy": 0.8653846153846154,
+          "ece": 0.1467307692307691,
+          "recommended": {
+            "confidenceMin": 0.95,
+            "marginMin": 0.3,
+            "coverage": 0.6153846153846154,
+            "precision": 0.9375
+          },
+          "defaultsKey": "openai/gpt-6-luna"
+        }
+      ]
+    }
+  },
+  "recommendedThresholds": {
+    "issue-triage": {
+      "typesafe/jev-1.13.0": null,
+      "typesafe/jev-1.14.0": null,
+      "cloudflare/clef": null,
+      "cloudflare/clef-flash": null,
+      "openai/gpt-6-luna": null
+    },
+    "comment-triage": {
+      "typesafe/jev-1.13.0": {
+        "confidenceMin": 0.95,
+        "marginMin": 0.3
+      },
+      "typesafe/jev-1.14.0": {
+        "confidenceMin": 0.95,
+        "marginMin": 0.3
+      },
+      "cloudflare/clef": {
+        "confidenceMin": 0.75,
+        "marginMin": 0.3
+      },
+      "cloudflare/clef-flash": null,
+      "openai/gpt-6-luna": {
+        "confidenceMin": 0.95,
+        "marginMin": 0.3
+      }
+    }
+  }
+}

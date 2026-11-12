@@ -12,7 +12,14 @@ const evalCaseSchema = z.object({
   latencyMs: z.number().optional(),
   usage: z.object({ input_tokens: z.number(), output_tokens: z.number() }).optional(),
   costUsd: z.number().optional(),
+  provider: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
 });
+
+/** `"<provider>/<model>"` of a case's recorded answers. */
+export function providerModelOfCase(evalCase: Pick<EvalCase, "provider" | "model">): string {
+  return `${evalCase.provider ?? "simulated"}/${evalCase.model ?? "recorded"}`;
+}
 
 /**
  * Loads a recorded-fixture dataset: one JSON object per line, each a

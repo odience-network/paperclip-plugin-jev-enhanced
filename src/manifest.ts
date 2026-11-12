@@ -132,7 +132,10 @@ const manifest: PaperclipPluginManifestV1 = {
         type: "array",
         items: { type: "string" },
         title: "Shadow Providers",
-        description: "Providers to compare against the primary on live traffic (recorded only; wired in a later release).",
+        description: "Providers asked alongside each policy's primary on live traffic, for comparison only. Each is asked alone " +
+          "(never a fallback chain), recorded as a shadow-mode row under the primary's decision_group_id, and never " +
+          "applied or suggested. Costs count against the daily token budget. Not used by VerdictGuard hooks or the " +
+          "browser tool, which are latency-bound.",
         "x-paperclip-advanced": true,
       },
       timeoutMs: {
