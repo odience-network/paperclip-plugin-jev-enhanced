@@ -7,7 +7,7 @@ import { classifyError } from "../src/decision/errors.js";
 import { buildProvider } from "../src/decision/registry.js";
 import type { DecisionProvider } from "../src/decision/provider.js";
 import { FIXTURE_CASES, FIXTURE_STATE, type FixtureCase, type FixtureFile } from "./fixtures/cases.js";
-import { startMockSystemOneServer, type MockSystemOneServer } from "./helpers/mock-systemone-server.js";
+import { plainHttpFetch, startMockSystemOneServer, type MockSystemOneServer } from "./helpers/mock-systemone-server.js";
 
 /**
  * L2 replay (plan 2.3b): every scrubbed recording under `tests/fixtures/`
@@ -51,10 +51,11 @@ describe.each(FIXTURE_CASES)("recorded fixture: $provider/$name", (fixtureCase) 
 
   beforeAll(async () => {
     server = await startMockSystemOneServer(() => ({ status: fixture.response.status, body: fixture.response.body }));
-    const config = parseVerdictConfig({ providers: { subject: providerConfig(fixture, server.baseUrl) } });
+    const config = parseVerdictConfig({ providers: { subject: providerConfig(fixture, server.secureBaseUrl) } });
     provider = buildProvider("subject", config.providers.subject, {
       resolveSecret: async () => "sk-replay",
       retry: { maxRetries: 0 },
+      fetchImpl: plainHttpFetch,
     });
   });
   afterAll(async () => {

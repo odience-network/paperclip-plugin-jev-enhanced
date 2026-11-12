@@ -75,7 +75,7 @@ describe("DashboardWidget", () => {
         "host: core/host-default — unreachable: core: unavailable on this host · not live-verified",
       ]);
       expect(list.querySelectorAll("li")[1].getAttribute("title")).toMatch(/Cloudflare does not store or train on requests/);
-      expect(list.querySelectorAll("li")[2].getAttribute("title")).toMatch(/ZDR eligible, EU residency available/);
+      expect(list.querySelectorAll("li")[2].getAttribute("title")).toMatch(/approved zero data retention; EU residency available/);
       expect(screen.getByText(/Provider health: no API key bound/)).toBeTruthy();
     } finally {
       uninstall();
