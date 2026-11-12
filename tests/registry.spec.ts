@@ -172,6 +172,11 @@ describe("registry: resolution", () => {
     ]);
     // The deprecated top-level model goes through the same check.
     expect(validateProviderConfig(parseVerdictConfig({ apiKeyRef: "r", model: "jev-1.12.0" }), undefined).errors).toHaveLength(1);
+    // Another SystemOne server reusing the preset's defaults has its own models.
+    const elsewhere = parseVerdictConfig({
+      providers: { local: { kind: "systemone", preset: "typesafe", baseUrl: "http://localhost:8000", authStyle: "none", model: "custom-decider-1" } },
+    });
+    expect(validateProviderConfig(elsewhere, undefined).errors).toEqual([]);
   });
 
   it("keeps jev-1.13.0 the default and resolves every alias to it, never to the provider-side alias", () => {

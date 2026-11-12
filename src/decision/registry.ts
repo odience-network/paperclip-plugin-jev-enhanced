@@ -234,6 +234,12 @@ export interface ProviderConfigReport {
   warnings: string[];
 }
 
+/** The pin applies to the preset's own host. A `baseUrl` elsewhere is another
+ * SystemOne server reusing the preset's wire defaults, with its own models. */
+function callsPresetHost(baseUrl: string | undefined, presetBaseUrl: string): boolean {
+  return !baseUrl || new URL(baseUrl).origin === new URL(presetBaseUrl).origin;
+}
+
 /** Static checks for `onValidateConfig`: references resolve, presets exist,
  * `core` is only the default where the host exposes it, legacy fields warn. */
 export function validateProviderConfig(config: VerdictConfig, host: unknown): ProviderConfigReport {
@@ -257,7 +263,7 @@ export function validateProviderConfig(config: VerdictConfig, host: unknown): Pr
       const preset = SYSTEMONE_PRESETS[providerConfig.preset];
       if (!preset) {
         errors.push(`providers.${id}: unknown preset "${providerConfig.preset}".`);
-      } else if (preset.pinnedModels && providerConfig.model) {
+      } else if (preset.pinnedModels && providerConfig.model && callsPresetHost(providerConfig.baseUrl, preset.baseUrl)) {
         const requested = providerConfig.model.trim();
         const model = preset.modelAliases[requested] ?? requested;
         if (!preset.pinnedModels.includes(model)) {

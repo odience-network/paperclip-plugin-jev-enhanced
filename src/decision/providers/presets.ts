@@ -16,8 +16,8 @@ export interface SystemOnePreset {
   defaultModel: string;
   /** Operator-typed aliases resolved to a pinned version before the call. */
   modelAliases: Readonly<Record<string, string>>;
-  /** When set, the only models (after alias resolution) config may name;
-   * anything else is a validation error. */
+  /** When set, the only models (after alias resolution) config may name for
+   * this preset's own host; anything else is a validation error. */
   pinnedModels?: readonly string[];
   capabilities: ProviderCapabilities;
   verification: "live" | "fixtures";
