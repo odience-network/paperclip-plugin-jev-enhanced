@@ -3,7 +3,7 @@ import { parseVerdictConfig } from "../src/config.js";
 import { DecisionPipeline } from "../src/decision/pipeline.js";
 import type { DecisionProvider, ProviderCapabilities } from "../src/decision/provider.js";
 import { buildPolicyPipeline } from "../src/decision/registry.js";
-import { CapabilityError, ProviderConnectionError, ProviderHttpError } from "../src/decision/errors.js";
+import { CapabilityError, ProviderConnectionError, ProviderHttpError, classifyError } from "../src/decision/errors.js";
 import { runPolicy } from "../src/policies/run.js";
 import { pingPolicy } from "../src/policies/ping.js";
 import { getLatestDecision, getModeSplit, listDecisionHistory, listLatestDecisionsByPolicy } from "../src/ledger/index.js";
@@ -76,6 +76,18 @@ describe("DecisionPipeline.askShadow", () => {
     const pipeline = new DecisionPipeline({ providers: [scriptedProvider("primary")], shadows: [shadow] });
     await expect(pipeline.askShadow(shadow, ASK)).rejects.toBeInstanceOf(CapabilityError);
     expect(shadow.decide).not.toHaveBeenCalled();
+  });
+
+  it("redacts the shadow's questions and checks its answers like the primary's", async () => {
+    const shadow = scriptedProvider("shadow");
+    const pipeline = new DecisionPipeline({ providers: [scriptedProvider("primary")], shadows: [shadow], redactionPatterns: ["SECRET-\\d"] });
+
+    await pipeline.askShadow(shadow, { ...ASK, questions: { pong: { type: "boolean", instructions: "is SECRET-1 live?" } } });
+    expect(JSON.stringify(shadow.decide.mock.calls[0][0].questions)).not.toContain("SECRET-1");
+
+    // The scripted shadow answers `pong`, which this question set doesn't ask.
+    const error = await pipeline.askShadow(shadow, { ...ASK, questions: { other: { type: "boolean" } } }).catch((e) => e);
+    expect(classifyError(error)).toBe("validation-failed");
   });
 });
 

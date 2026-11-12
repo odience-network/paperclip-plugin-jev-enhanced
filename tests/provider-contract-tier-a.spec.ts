@@ -8,7 +8,7 @@ import { runPolicy } from "../src/policies/run.js";
 import { pingPolicy } from "../src/policies/ping.js";
 import type { DecisionQuestions } from "../src/decision/types.js";
 import { createFakeDb } from "./helpers/fake-db.js";
-import { startMockSystemOneServer, type MockHandler, type MockSystemOneServer } from "./helpers/mock-systemone-server.js";
+import { plainHttpFetch, startMockSystemOneServer, type MockHandler, type MockSystemOneServer } from "./helpers/mock-systemone-server.js";
 import { syntheticOpenAiReply, syntheticWorkersAiReply } from "./helpers/mock-tier-a.js";
 
 /**
@@ -34,6 +34,7 @@ function runtime(overrides: Partial<ProviderRuntime> = {}): ProviderRuntime {
     resolveSecret: async () => TEST_KEY,
     timeoutMs: 2_000,
     retry: { maxRetries: 0, backoffInitialMs: 1, backoffMaxMs: 1 },
+    fetchImpl: plainHttpFetch,
     ...overrides,
   };
 }
@@ -140,7 +141,7 @@ describe.each(CASES)("provider contract: $name", (contract) => {
     server.respondWith(contract.reply);
   });
 
-  const provider = (overrides: Partial<ProviderRuntime> = {}) => providerFrom(contract.providerConfig(server.baseUrl), overrides);
+  const provider = (overrides: Partial<ProviderRuntime> = {}) => providerFrom(contract.providerConfig(server.secureBaseUrl), overrides);
   const ask = (p: DecisionProvider, questions: DecisionQuestions = MIXED_QUESTIONS, state: unknown = "s") =>
     new DecisionPipeline({ providers: [p] }).ask({ policy: "contract", companyId: "c1", state, questions });
 
@@ -280,9 +281,9 @@ describe.each(CASES)("provider contract: $name", (contract) => {
   });
 
   it("cannot reach a host outside the egress allowlist", async () => {
-    const raw = contract.providerConfig(server.baseUrl);
+    const raw = contract.providerConfig(server.secureBaseUrl);
     const config = parseVerdictConfig({ providers: { subject: raw } });
-    expect([...egressAllowlist(config)]).toEqual([new URL(server.baseUrl).origin]);
+    expect([...egressAllowlist(config)]).toEqual([new URL(server.secureBaseUrl).origin]);
 
     const elsewhere = allowlistedFetch(new Set(["https://api.typesafe.ai"]), (input, init) => fetch(input, init));
     const error = await ask(providerFrom(raw, { fetchImpl: elsewhere })).catch((e: unknown) => e);
@@ -303,7 +304,7 @@ describe("cloudflare adapter specifics", () => {
 
   it("treats an envelope with success: false as invalid output", async () => {
     server.respondWith(() => ({ body: { success: false, result: null, errors: [{ code: 3030, message: "nope" }] } }));
-    const subject = providerFrom({ kind: "cloudflare", accountId: ACCOUNT_ID, apiKeyRef: "ref", baseUrl: server.baseUrl });
+    const subject = providerFrom({ kind: "cloudflare", accountId: ACCOUNT_ID, apiKeyRef: "ref", baseUrl: server.secureBaseUrl });
     const error = await new DecisionPipeline({ providers: [subject] })
       .ask({ policy: "p", companyId: "c1", state: "s", questions: { q: { type: "boolean", instructions: "q?" } } })
       .catch((e: unknown) => e);
@@ -312,7 +313,7 @@ describe("cloudflare adapter specifics", () => {
 
   it("reports a model missing from the catalog as unavailable", async () => {
     server.respondWith(() => ({ body: { success: true, result: [{ name: "@cf/cloudflare/clef" }] } }));
-    const subject = providerFrom({ kind: "cloudflare", accountId: ACCOUNT_ID, apiKeyRef: "ref", model: "clef-flash", baseUrl: server.baseUrl });
+    const subject = providerFrom({ kind: "cloudflare", accountId: ACCOUNT_ID, apiKeyRef: "ref", model: "clef-flash", baseUrl: server.secureBaseUrl });
     await expect(subject.availability()).resolves.toEqual({ ok: false, reason: "model-not-listed" });
   });
 
@@ -336,7 +337,7 @@ describe("openai adapter specifics", () => {
     server.requests.length = 0;
     server.respondWith(syntheticOpenAiReply);
   });
-  const luna = () => providerFrom({ kind: "openai", apiKeyRef: "ref", baseUrl: `${server.baseUrl}/v1` });
+  const luna = () => providerFrom({ kind: "openai", apiKeyRef: "ref", baseUrl: `${server.secureBaseUrl}/v1` });
 
   it("turns a refusal into DecisionRefusalError, never an answer, and does not fall back", async () => {
     server.respondWith(() => ({

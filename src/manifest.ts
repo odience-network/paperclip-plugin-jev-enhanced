@@ -97,13 +97,14 @@ const manifest: PaperclipPluginManifestV1 = {
         description:
           "Decision providers by alias. Kinds: " +
           "{ kind: \"systemone\", preset, apiKeyRef, model?, baseUrl?, path?, authStyle? }: preset \"typesafe\" " +
-          "sends redacted state text to TypeSafe (api.typesafe.ai; zero data retention on enterprise plans). " +
+          "sends redacted state text to TypeSafe (api.typesafe.ai; zero data retention on enterprise plans only). " +
           "{ kind: \"cloudflare\", accountId, apiKeyRef, model: \"clef\" | \"clef-flash\" }: " +
           `${CLOUDFLARE_DISCLOSURE} ` +
           "{ kind: \"openai\", apiKeyRef, model? (default gpt-6-luna) }: " +
           `${OPENAI_DISCLOSURE} ` +
           "{ kind: \"core\" }: uses the host's own decision service where the host exposes one, holds no " +
-          "credential, and is billed by the host. Provider calls can only reach the hosts of configured providers.",
+          "credential, and is billed by the host. Provider calls can only reach the hosts of configured providers. " +
+          "A baseUrl must be https: unless the provider sends no credential (authStyle \"none\").",
         additionalProperties: {
           type: "object",
           properties: {

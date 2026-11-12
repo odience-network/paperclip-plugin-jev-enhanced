@@ -1,6 +1,7 @@
 import { noul, score } from "@typesafe-ai/sdk";
 import type { DecisionQuestions } from "../decision/types.js";
 import { confidenceMarginFor } from "./issue-triage.js";
+import { isFastResponseReceipt, type CommentOrigin } from "./util.js";
 import type { FieldDecision, Policy, PolicyVerdict } from "./types.js";
 
 export type CommentTriageAuthorType = "user" | "agent" | "system";
@@ -16,6 +17,9 @@ export interface CommentTriageState {
   /** `true` when this issue's `originKind` belongs to this plugin itself —
    * `preFilter` skips these unconditionally, matching `issue-triage`. */
   isPluginOrigin: boolean;
+  /** `"fast_response"` for core's acknowledgement receipts, which `preFilter`
+   * skips unconditionally (see `isFastResponseReceipt`). */
+  origin: CommentOrigin;
 }
 
 export const commentTriagePolicy: Policy<CommentTriageState> = {
@@ -26,6 +30,10 @@ export const commentTriagePolicy: Policy<CommentTriageState> = {
 
   preFilter(state, ctx): boolean {
     if (state.isPluginOrigin) return false;
+    // A fast-response receipt is agent-authored but says nothing the agent
+    // decided — classifying it would cost one provider call and one ledger
+    // row per human comment, and could wake the assignee on its own echo.
+    if (isFastResponseReceipt(state)) return false;
     // Each comment's id/body makes its state hash effectively unique, so
     // this rarely fires in practice — it exists for the same reason
     // `issue-triage` has it: a redelivered or re-run event for a comment

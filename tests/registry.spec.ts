@@ -8,6 +8,7 @@ import {
   defaultProviderId,
   effectiveProviders,
   providerBinding,
+  providerDisclosure,
   resolvePolicyProviderIds,
   validateProviderConfig,
 } from "../src/decision/registry.js";
@@ -189,6 +190,65 @@ describe("registry: resolution", () => {
 
   it("rejects provider kinds this build can't construct yet", () => {
     expect(() => parseVerdictConfig({ providers: { cf: { kind: "cloudflare" } } })).toThrow();
+  });
+});
+
+describe("registry: cleartext credentials and disclosures (ODIAA-2473 F3)", () => {
+  const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
+
+  it.each([
+    ["systemone with a key", { kind: "systemone", preset: "typesafe", apiKeyRef: "ref", baseUrl: "http://proxy.example.com" }],
+    ["systemone on the preset's bearer auth", { kind: "systemone", preset: "typesafe", baseUrl: "http://proxy.example.com" }],
+    ["systemone x-api-key", { kind: "systemone", preset: "typesafe", authStyle: "x-api-key", baseUrl: "http://proxy.example.com" }],
+    ["systemone none, but a key bound", { kind: "systemone", preset: "typesafe", authStyle: "none", apiKeyRef: "ref", baseUrl: "http://proxy.example.com" }],
+    ["cloudflare", { kind: "cloudflare", accountId: ACCOUNT_ID, apiKeyRef: "ref", baseUrl: "http://gateway.example.com" }],
+    ["openai", { kind: "openai", apiKeyRef: "ref", baseUrl: "http://proxy.example.com/v1" }],
+  ])("rejects an http: baseUrl for a provider that sends a credential: %s", (_name, provider) => {
+    expect(() => parseVerdictConfig({ providers: { subject: provider } })).toThrow(/baseUrl must be https:/);
+  });
+
+  it("rejects an http: legacy top-level baseUrl, which is read as the bearer typesafe provider", () => {
+    expect(() => parseVerdictConfig({ apiKeyRef: "ref", baseUrl: "http://proxy.example.com" })).toThrow(/baseUrl must be https:/);
+  });
+
+  it("allows http: only for an unauthenticated provider, and https: for any", () => {
+    const config = parseVerdictConfig({
+      providers: {
+        local: { kind: "systemone", preset: "typesafe", authStyle: "none", baseUrl: "http://decider.example.com" },
+        proxied: { kind: "openai", apiKeyRef: "ref", baseUrl: "https://proxy.example.com/v1" },
+      },
+    });
+    expect(Object.keys(config.providers)).toEqual(["local", "proxied"]);
+  });
+
+  it("keeps the known host's disclosure when baseUrl stays on it", () => {
+    const config = parseVerdictConfig({
+      providers: {
+        ts: { kind: "systemone", preset: "typesafe", apiKeyRef: "ref", baseUrl: "https://api.typesafe.ai/" },
+        oa: { kind: "openai", apiKeyRef: "ref", baseUrl: "https://api.openai.com/v1" },
+      },
+    });
+    expect(providerDisclosure(config.providers.ts)).toMatch(/^Sends redacted state text to TypeSafe/);
+    expect(providerDisclosure(config.providers.oa)).toMatch(/^Sends redacted state text to OpenAI .*30 days/);
+  });
+
+  it("names the custom origin, with unknown retention, when baseUrl moves a provider off its known host", () => {
+    const config = parseVerdictConfig({
+      providers: {
+        ts: { kind: "systemone", preset: "typesafe", apiKeyRef: "ref", baseUrl: "https://proxy.example.com/typesafe" },
+        cf: { kind: "cloudflare", accountId: ACCOUNT_ID, apiKeyRef: "ref", baseUrl: "https://gateway.example.net/v1/acct/gw" },
+        oa: { kind: "openai", apiKeyRef: "ref", baseUrl: "https://llm.example.org:8443/v1" },
+      },
+    });
+    expect(providerDisclosure(config.providers.ts)).toBe(
+      "Sends redacted state text to https://proxy.example.com (custom base URL; retention unknown).",
+    );
+    expect(providerDisclosure(config.providers.cf)).toBe(
+      "Sends redacted state text to https://gateway.example.net (custom base URL; retention unknown).",
+    );
+    expect(providerDisclosure(config.providers.oa)).toBe(
+      "Sends redacted state text to https://llm.example.org:8443 (custom base URL; retention unknown).",
+    );
   });
 });
 

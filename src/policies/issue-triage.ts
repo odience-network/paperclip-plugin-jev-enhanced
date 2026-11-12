@@ -229,6 +229,10 @@ export const issueTriagePolicy: Policy<IssueTriageState> = {
       const hasUserAssignee = state?.hasUserAssignee ?? true;
       const isSentinel = ownerAnswer.choice === "unassigned" || ownerAnswer.choice === "needs_triage";
       const value = isSentinel ? null : ownerAnswer.choice;
+      // The pipeline already rejects options that weren't offered; this is
+      // the second line, so an owner outside `eligibleAgents` (or one that
+      // can't be checked without state) is never applied.
+      const isEligible = isSentinel || (state?.eligibleAgents.some((agent) => agent.id === ownerAnswer.choice) ?? false);
       // Only a specific new owner, and only when nothing is set yet, can
       // ever auto-apply; `alwaysAuto`/`!respect` only ever lets this touch
       // an *agent*-set owner, never a human one (see below).
@@ -236,7 +240,10 @@ export const issueTriagePolicy: Policy<IssueTriageState> = {
 
       let action: FieldDecision["action"];
       let reason: string | undefined;
-      if (!clears(ownerCm)) {
+      if (!isEligible) {
+        action = "observe";
+        reason = "ineligible-owner";
+      } else if (!clears(ownerCm)) {
         action = "observe";
         reason = "below-threshold";
       } else if (hasUserAssignee) {

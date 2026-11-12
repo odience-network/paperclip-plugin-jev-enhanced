@@ -76,7 +76,9 @@ src/
     rates.ts           Per-provider, per-model rate cards with a version
                       string recorded in the ledger's `rate_version`.
     canonical.ts       Deterministic state canonicalization + SHA-256 hashing.
-    redact.ts          Pattern-based redaction and head/tail truncation.
+    redact.ts          Pattern-based redaction (state and question text)
+                      and head/tail truncation.
+    validate.ts        Checks provider answers against the questions sent.
     cache.ts           In-memory cache keyed by (policy, provider, model,
                       stateHash, questionsHash).
     budget.ts          Daily token/cost budget store, backed by `ctx.state`.
@@ -285,7 +287,10 @@ can be re-acquired afterward (covered by `tests/ledger.spec.ts`).
 
 1. **Canonicalize** state to a deterministic string (`canonical.ts`).
 2. **Redact** configured patterns (`redactionPatterns`), case-insensitively;
-   an invalid pattern is skipped, not thrown.
+   an invalid pattern is skipped, not thrown. Question text is redacted the
+   same way (names, instructions, criteria, choice option keys, with a `#n`
+   suffix where two keys would collide); answers are mapped back to the
+   original names and keys. `questionsHash` is taken after redaction.
 3. **Truncate** head/tail to `maxStateChars` (default `DEFAULT_MAX_STATE_CHARS`).
 4. **Hash** the result (SHA-256) — this hash, not the text, goes in the
    ledger.
@@ -327,7 +332,14 @@ Then, for each provider in the policy's `[primary, ...fallbacks]` chain:
 10. **Budget + cost accounting**: usage is added to the daily budget store;
     cost and `rateVersion` come from the provider's rate card (`rates.ts`).
     Host-billed providers record null cost and no rate version.
-11. **Cache write** on success.
+11. **Answer check** (`validateAnswersAgainst`, `src/decision/validate.ts`)
+    against the questions this provider was sent, after capping: every
+    answer is for an asked question and of its type, a choice and its
+    probability keys are offered options, a score lies within its levels.
+    A violation is `VerdictValidationError` (`invalid_output`), so the chain
+    falls back. Provider output is untrusted: without this a provider could
+    name an agent that was never offered and `enforce` mode would apply it.
+12. **Cache write** on success.
 
 The outcome names the provider that answered, the chain head it was meant
 for, and why the chain moved on (`fallbackFrom`). `runPolicy`,
@@ -392,7 +404,7 @@ Company-scoped, validated by `src/config.ts` (`parseVerdictConfig`):
 
 | Field | Default | Notes |
 |---|---|---|
-| `providers.<id>` | — | `{kind: "systemone", preset, apiKeyRef, model?, baseUrl?, path?, authStyle?}`, `{kind: "cloudflare", accountId, apiKeyRef, model?: "clef" \| "clef-flash", baseUrl?}`, `{kind: "openai", apiKeyRef, model? (gpt-6-luna), baseUrl?}` or `{kind: "core", model?}`. Ids are lowercase letters, digits, dashes. Provider fetches only reach the origins of configured providers |
+| `providers.<id>` | — | `{kind: "systemone", preset, apiKeyRef, model?, baseUrl?, path?, authStyle?}`, `{kind: "cloudflare", accountId, apiKeyRef, model?: "clef" \| "clef-flash", baseUrl?}`, `{kind: "openai", apiKeyRef, model? (gpt-6-luna), baseUrl?}` or `{kind: "core", model?}`. Ids are lowercase letters, digits, dashes. Provider fetches only reach the origins of configured providers. `baseUrl` must be `https:` unless the provider sends no credential (`authStyle: "none"`, no `apiKeyRef`) |
 | `defaultProvider` | `typesafe` (or the first provider) | Used by every policy without its own `provider` |
 | `shadowProviders` | `[]` | Resolved by the registry; called alongside the primary from G5 |
 | `apiKeyRef` | — | Deprecated. With an empty `providers` map, read as `providers.typesafe.apiKeyRef` (warning in `onValidateConfig`) |
@@ -457,6 +469,31 @@ responsibilities enforced by convention and code review in `apply/`/`decide()`
 implementations, not by a generic framework guard — each `apply` handler and
 each policy's `decide()` is small and reviewable specifically because of
 this.
+
+### Events > comment origin (fast-response receipts)
+
+Core's *fast responses* (paperclipai/paperclip #15748, off by default) post a
+one-sentence acknowledgement as an ordinary comment attributed to the
+assigned agent whenever a human comments. It carries a server-owned
+`IssueComment.origin = "fast_response"` and is logged as
+`issue.comment_added`, so it reaches the worker as `issue.comment.created`
+like any other agent comment.
+
+Every comment reader in the plugin applies one rule,
+`isFastResponseReceipt()` in `src/policies/util.ts`: a receipt is never
+classified, never fed to a provider, and never treated as a run's own
+claim. `commentOriginOf()` reads the field and maps a missing `origin` (older
+cores) to `"comment"`.
+
+- `comment-triage`: `buildCommentTriageState` copies the origin onto
+  `CommentTriageState.origin`, and `preFilter` returns `false` for a receipt
+  — outcome `skipped`, no provider call, no ledger row, no
+  `comment.classified` event, no wakeup.
+- `run-outcome-qa`: `buildRunOutcomeQaState` drops receipts before picking
+  the run's final comment by `createdByRunId`.
+
+The suggest and apply paths and the UI feeds read only ledger rows, never
+host comments, so a skipped receipt never reaches them.
 
 ### Policies > `issue-triage`
 
@@ -600,8 +637,9 @@ question) always reports as the higher-priority verdict.
 
 `preFilter` skips: comments the plugin itself authored (`isPluginOrigin`);
 re-triage where the computed state hash matches the prior decision's hash;
-and comments authored by `authorType: "system"` (nothing a human or agent
-said, so nothing to triage).
+comments authored by `authorType: "system"` (nothing a human or agent
+said, so nothing to triage); and core's fast-response receipts
+(`origin: "fast_response"`, see "Events > comment origin").
 
 Mode semantics for `wakeupAssignee` once the gate clears:
 - **shadow**: ledger row only, `outcome: "observed"`.
@@ -786,6 +824,34 @@ both of which are torn down with the plugin). The `verdict_decisions`/
 historical data survives a disable/re-enable cycle; a full uninstall drops
 the namespace per the host's normal plugin-uninstall data-retention policy.
 
+## Scope versus core's MCP tool gateway
+
+VerdictGuard (`src/guard/`, `hooks/`) covers harness-native tools (Bash,
+Edit, Write, browser actions driven through them) and the `Stop` event. MCP
+tools belong to Paperclip core's tool gateway, which applies its own risk
+classes, `allow | block | require_approval | rate_limit | trust_rule`
+policies and approval cards. VerdictGuard stays off them at two layers:
+
+- The hook matcher in `hooks/README.md` is `^(?!mcp__).*`.
+- `evaluateGuard` checks `isCoreGovernedTool(toolName)` (`src/guard/pre.ts`)
+  before any rail. For `PreToolUse`/`PostToolUse` on an `mcp__*` tool it
+  returns `allow` with reason `governed-by-core-tool-gateway`, and writes
+  one `rails-only` ledger row with outcome `applied`. It makes no provider
+  call. The `guard-pre`/`guard-post` `preFilter`s also reject these tools.
+
+The verdicts map one to one: `allow` → `allow`, `deny` → `deny` (core's
+`block` policy), `ask` → `require_approval`. The two surfaces differ: `ask`
+is a harness permission prompt, while `require_approval` is a board approval
+card.
+
+If both layers evaluated an MCP call, VerdictGuard could override a core
+trust rule, or add a second prompt next to core's card. The residual risk is
+a capability reachable both ways, e.g. Paperclip API writes via Bash `curl`
+or the Paperclip MCP tool. Each layer sees only its own path, so operators
+should mirror core's destructive-tool policies in the `guard-pre`
+thresholds and `blockedTools` for the native equivalents. `docs/SECURITY.md`
+has the full write-up under the same heading.
+
 ## Security posture
 
 - The TypeSafe API key is only ever read via `ctx.secrets.resolve`, bound to
@@ -794,8 +860,10 @@ the namespace per the host's normal plugin-uninstall data-retention policy.
 - No raw issue state or free text is ever written to `verdict_decisions` or
   `verdict_feedback` — only hashes, structured answers, scores, and usage
   metadata (enforced by `tests/ledger.spec.ts`).
-- `redactionPatterns` strip sensitive substrings from state text before it
-  leaves the plugin, ahead of canonicalization's hash and the provider call.
+- `redactionPatterns` strip sensitive substrings from state and question
+  text before it leaves the plugin, ahead of the hashes and the provider call.
+- A credentialed provider's `baseUrl` must be `https:`; config validation
+  rejects `http:` unless the provider sends no credential.
 - Every policy defaults to `shadow` mode; `apply/` (the only place with side
   effects) is unreachable except in `enforce` mode.
 - `ask`/`classify-task`/`verify`/`rerank` (the `verdict-*` decision tools and

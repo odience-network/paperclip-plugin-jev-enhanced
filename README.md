@@ -1,5 +1,7 @@
 # Verdict
 
+[![Verdict CI](https://github.com/odience-network/paperclip-plugin-verdict/actions/workflows/ci.yml/badge.svg)](https://github.com/odience-network/paperclip-plugin-verdict/actions/workflows/ci.yml)
+
 Decision models for Paperclip: TypeSafe Jev, Cloudflare Clef, OpenAI
 Decisions, self-hosted.
 
@@ -42,10 +44,29 @@ Example, all three Tier A providers with TypeSafe as the default:
 Each provider's disclosure (which host receives state text, and its
 published retention) is shown in the settings schema and next to the
 provider in the dashboard widget: Cloudflare does not store or train on
-requests; OpenAI is ZDR eligible with EU residency available. Provider
+requests; OpenAI retains requests up to 30 days for abuse monitoring
+unless the organization has approved zero data retention, and EU residency
+is available; TypeSafe has zero data retention on enterprise plans only. A
+`baseUrl` that points a provider somewhere other than its known host is
+disclosed as that origin with unknown retention. Provider
 calls can only reach the hosts of configured providers. OpenAI's
 `refusal` answers fail the call with error code `refused`; they are never
 turned into an answer, and the chain does not fall back on them.
+
+A `baseUrl` must be `https:` whenever the provider sends a credential
+(`apiKeyRef` bound, or any `authStyle` but `none`); config validation
+rejects `http:` there, since the token would go out in cleartext. Plain
+`http:` is only for an unauthenticated self-hosted server. The host's plugin
+fetch refuses loopback and private addresses, so such a server has to be
+reachable on a public address: a `http://localhost` endpoint cannot be
+called through it.
+
+Answers are checked against the questions each provider was sent: an answer
+to a question that wasn't asked, of the wrong type, choosing an option that
+wasn't offered (including one capped away for that provider) or scoring
+outside the levels fails as `invalid_output` and falls back like any other
+unusable reply. Redaction patterns apply to question text and option keys
+as well as state.
 
 ### Shadow providers and per-provider thresholds
 

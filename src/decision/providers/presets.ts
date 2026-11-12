@@ -54,6 +54,6 @@ export const SYSTEMONE_PRESETS: Record<string, SystemOnePreset> = {
     },
     verification: "live",
     rateCard: "typesafe",
-    disclosure: "Sends redacted state text to TypeSafe (api.typesafe.ai). Zero data retention on enterprise plans.",
+    disclosure: "Sends redacted state text to TypeSafe (api.typesafe.ai). Zero data retention on enterprise plans only; other plans may retain requests.",
   },
 };

@@ -6,7 +6,7 @@ import { policyConfigFor } from "../config.js";
 import { classifyError, errorClassOf } from "../decision/errors.js";
 import type { VerdictAskOutcome } from "../decision/pipeline.js";
 import { providerBinding } from "../decision/registry.js";
-import { guardPrePolicy, type GuardPreState } from "./pre.js";
+import { CORE_GOVERNED_TOOL_REASON, guardPrePolicy, isCoreGovernedTool, type GuardPreState } from "./pre.js";
 import { guardPostPolicy, type GuardPostState } from "./post.js";
 import { guardStopPolicy, type GuardStopState } from "./stop.js";
 import { runRails, type RailDeps } from "./rails.js";
@@ -152,6 +152,23 @@ export async function evaluateGuard(request: GuardEvaluateRequest, deps: Evaluat
     agentId: deps.agentId ?? null,
     config: policyConfig,
   };
+
+  // MCP tools are core's tool gateway's to govern, so this runs before every
+  // rail (kill switch, blocklist, loop guard included): VerdictGuard must not
+  // override a core trust rule or add a second prompt next to a core approval
+  // card. `bypassMode` so the row reads `applied` in every mode — this is a
+  // scope boundary, not a policy verdict the mode could downgrade.
+  if (request.hookKind !== "Stop" && isCoreGovernedTool(request.toolName)) {
+    await recordRailOnlyDecision(deps, request, policy, policyConfig.mode, "allow", CORE_GOVERNED_TOOL_REASON, true);
+    return {
+      decision: "allow",
+      reason: CORE_GOVERNED_TOOL_REASON,
+      confidence: null,
+      latencyMs: Date.now() - started,
+      rail: true,
+      intendedDecision: "allow",
+    };
+  }
 
   const railVerdict = await runRails(request, deps.companyId, deps.config.guardRails, deps.rails);
   if (railVerdict) {
