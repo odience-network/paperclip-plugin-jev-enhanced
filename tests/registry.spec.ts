@@ -4,6 +4,7 @@ import { DecisionPipeline } from "../src/decision/pipeline.js";
 import type { DecisionProvider, ProviderCapabilities } from "../src/decision/provider.js";
 import { createInMemoryVerdictCache } from "../src/decision/cache.js";
 import {
+  blockedBaseUrlReason,
   buildPolicyProviders,
   defaultProviderId,
   effectiveProviders,
@@ -257,6 +258,41 @@ describe("registry: cleartext credentials and disclosures (ODIAA-2473 F3)", () =
     );
     expect(() => parseVerdictConfig({ providers: { subject: { kind: "systemone", preset } } })).not.toThrow();
   });
+
+  it.each(["ollama", "von"])("flags the %s preset's localhost default as a base URL the host refuses (ODIAA-2812)", (preset) => {
+    const config = parseVerdictConfig({ providers: { subject: { kind: "systemone", preset } } });
+    expect(blockedBaseUrlReason(config.providers.subject)).toMatch(/loopback or private address, which the host's plugin fetch refuses/);
+    expect(validateProviderConfig(config, undefined).warnings).toContainEqual(
+      expect.stringMatching(/^providers\.subject: base URL http:\/\/localhost:\d+ is a loopback or private address/),
+    );
+    const moved = parseVerdictConfig({ providers: { subject: { kind: "systemone", preset, baseUrl: "http://decider.example.com" } } });
+    expect(blockedBaseUrlReason(moved.providers.subject)).toBeNull();
+  });
+
+  it.each([
+    "http://127.0.0.1:8000",
+    "http://10.1.2.3",
+    "http://172.16.0.1",
+    "http://192.168.1.10",
+    "http://169.254.169.254",
+    "http://0.0.0.0",
+    "http://api.localhost",
+    "http://[::1]:8000",
+    "http://[fd00::1]",
+    "http://[fe80::1]",
+    "http://[::ffff:127.0.0.1]",
+  ])("flags a loopback or private baseUrl override: %s", (baseUrl) => {
+    const config = parseVerdictConfig({ providers: { subject: { kind: "systemone", preset: "laya", baseUrl } } });
+    expect(blockedBaseUrlReason(config.providers.subject)).not.toBeNull();
+  });
+
+  it.each(["https://api.typesafe.ai", "http://172.32.0.1", "http://11.0.0.1", "https://fd.example.com"])(
+    "does not flag a public baseUrl: %s",
+    (baseUrl) => {
+      const config = parseVerdictConfig({ providers: { subject: { kind: "systemone", preset: "laya", baseUrl } } });
+      expect(blockedBaseUrlReason(config.providers.subject)).toBeNull();
+    },
+  );
 
   it("applies the custom-origin disclosure to the Tier B presets", () => {
     const config = parseVerdictConfig({

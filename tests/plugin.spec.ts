@@ -264,6 +264,34 @@ describe("plugin scaffold", () => {
     expect(fetched).toEqual([]);
   });
 
+  it.each(["ollama", "von"])(
+    "reports the %s preset's localhost default as misconfigured, not unreachable, without calling it (ODIAA-2812)",
+    async (preset) => {
+      const harness = createTestHarness({
+        manifest,
+        capabilities: [...manifest.capabilities, "events.emit"],
+        config: { providers: { local: { kind: "systemone", preset } }, defaultProvider: "local" },
+      });
+      harness.ctx.db = createFakeDb();
+      const fetched: string[] = [];
+      harness.ctx.http.fetch = (async (input: string | URL | Request) => {
+        fetched.push(String(input));
+        throw new Error("Private/reserved IP address blocked");
+      }) as typeof harness.ctx.http.fetch;
+      await plugin.definition.setup(harness.ctx);
+
+      const summary = await harness.getData<{ providerHealth: { status: string; message?: string } }>("dashboard-summary", {
+        companyId: "company_1",
+      });
+      expect(summary.providerHealth.status).toBe("misconfigured");
+      expect(summary.providerHealth.message).toMatch(/http:\/\/localhost:\d+ is a loopback or private address/);
+      const health = await plugin.definition.onHealth?.();
+      expect(health?.status).toBe("degraded");
+      expect(health?.message).toMatch(/^The default provider's base URL .* set baseUrl to a publicly reachable address/);
+      expect(fetched).toEqual([]);
+    },
+  );
+
   it("carries the Clef benchmark caveat into provider health", async () => {
     const harness = createTestHarness({
       manifest,

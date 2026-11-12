@@ -55,6 +55,7 @@ export type ProviderHealth = (
   | { status: "unbound" }
   | { status: "unchecked" }
   | { status: "unreachable"; message: string }
+  | { status: "misconfigured"; message: string }
 ) & { verification?: "live" | "fixtures"; caveat?: string };
 
 /** One configured provider, as the health widget lists it. */

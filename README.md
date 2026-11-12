@@ -59,9 +59,9 @@ against the mock server, and replays the docs-derived fixtures in
 | `perplexity` | `POST https://api.perplexity.ai/v1/decisions` | Bearer | Reference caps (not published). Images accepted in Perplexity's own format; flag reserved. No published price, cost recorded as 0. |
 | `openrouter` | `POST https://openrouter.ai/api/alpha/decisions` | Bearer | Jev caps. Cost is the response's `usage.cost` (credits = USD; BYOK: fee only), not a rate card. Dated model echo (`…-20260917`) is mapped to the pin; a `refusal` answer fails the decision. |
 | `decisions-api` | `POST https://decisions-api.dev/v1/systemone` | Bearer | 34+ models, fixtures only, 8 questions max (32 KiB of text and questions). `model` must be an id from the catalog below unless `allowUnlistedModel: true`. Response envelope `{code, data: {result, creditsUsed}}` is unwrapped; `code != 0` fails. Cost is `creditsUsed / 10,000` USD, else estimated from the catalog price. |
-| `ollama` | `POST http://localhost:11434/v1/systemone` | none | 64 questions, 26 options, 10 levels (local). Ollama 0.35.1+. Models from `GET /api/tags`. |
+| `ollama` | `POST http://localhost:11434/v1/systemone` | none | 64 questions, 26 options, 10 levels (local). Ollama 0.35.1+. Models from `GET /api/tags`. The localhost default is refused by the host's plugin fetch; set a public `baseUrl`. |
 | `laya` | `POST <baseUrl>/v1/systemone` | none | 20 options (quality collapses above). Confidence derived: 1 − normalised entropy; overconfident until calibrated. |
-| `von` | `POST http://localhost:8000/v1/systemone` | none (bearer if `VON_API_KEY`) | Confidence derived from a calibration map (`von calibrate` refits it). Banded `noul` is replaced by `noul_raw`, the calibrated posterior. English only; repo archived. |
+| `von` | `POST http://localhost:8000/v1/systemone` | none (bearer if `VON_API_KEY`) | Confidence derived from a calibration map (`von calibrate` refits it). Banded `noul` is replaced by `noul_raw`, the calibrated posterior. English only; repo archived. The localhost default is refused by the host's plugin fetch; set a public `baseUrl`. |
 | `kev` | `POST https://api.opper.ai/v3/compat/v1/systemone` | Bearer | EU-hosted. `noul` and `choice` only. $0.042 / 1M input tokens. For a self-hosted `kev-onnx` server set `baseUrl` and `authStyle: "none"`. |
 
 #### decisions-api.dev model catalog
@@ -108,6 +108,8 @@ check (any other request would cost money); the dashboard shows them as
 `ollama` and `von` default to a `http://localhost` base URL, which the host's
 plugin fetch refuses (see the `baseUrl` rules below): point `baseUrl` at a
 publicly reachable address. With a credential bound it must be `https:`.
+Until then, config validation warns and the provider health check reports
+the provider as misconfigured rather than unreachable.
 
 Example, all three Tier A providers with TypeSafe as the default:
 

@@ -5,6 +5,7 @@ function healthLabel(health: ProviderHealth): string {
   if (health.status === "ok") return `ok (${health.modelCount} models)`;
   if (health.status === "unbound") return "no API key bound";
   if (health.status === "unchecked") return "configured (provider publishes no health endpoint)";
+  if (health.status === "misconfigured") return `misconfigured: ${health.message}`;
   return `unreachable: ${health.message}`;
 }
 
