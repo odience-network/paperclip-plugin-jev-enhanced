@@ -18,3 +18,23 @@ export function confidenceMarginFor(answer: VerdictAnswer | undefined): { confid
   }
   return null;
 }
+
+/** Where a comment came from. `"fast_response"` is core's one-sentence
+ * acknowledgement receipt (paperclipai/paperclip #15748), posted as the
+ * assigned agent whenever a human comments — it is never the agent's own
+ * work, claim, or question. */
+export type CommentOrigin = "comment" | "fast_response";
+
+/** Reads a host comment's server-owned `origin`. Older cores (and the
+ * `@paperclipai/shared` build this plugin compiles against) omit the field,
+ * so anything other than `"fast_response"` is an ordinary `"comment"`. */
+export function commentOriginOf(comment: object): CommentOrigin {
+  return (comment as { origin?: unknown }).origin === "fast_response" ? "fast_response" : "comment";
+}
+
+/** The one rule every comment reader in this plugin applies: a fast-response
+ * receipt is never classified, never counted as a run's final comment, and
+ * never fed to a provider. See ARCHITECTURE.md "Comment origin". */
+export function isFastResponseReceipt(comment: object): boolean {
+  return commentOriginOf(comment) === "fast_response";
+}

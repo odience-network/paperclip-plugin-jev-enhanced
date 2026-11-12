@@ -1,5 +1,7 @@
 # Verdict
 
+[![Verdict CI](https://github.com/odience-network/paperclip-plugin-verdict/actions/workflows/ci.yml/badge.svg)](https://github.com/odience-network/paperclip-plugin-verdict/actions/workflows/ci.yml)
+
 Decision models for Paperclip: TypeSafe Jev, Cloudflare Clef, OpenAI
 Decisions, self-hosted.
 
