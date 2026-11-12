@@ -9,6 +9,7 @@ import type { VerdictAnswer } from "../src/decision/types.js";
 import { verdictConfigSchema, type VerdictConfig } from "../src/config.js";
 import type { LedgerDb } from "../src/ledger/db.js";
 import { hashState } from "../src/decision/redact.js";
+import { VerdictValidationError } from "../src/decision/errors.js";
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -213,6 +214,15 @@ describe("issueTriagePolicy.decide", () => {
     const ownerField = verdict.fields?.find((f) => f.field === "assigneeAgentId");
     expect(ownerField).toMatchObject({ action: "apply", value: "agent_1" });
     expect(verdict.verdict).toBe("assign:agent_1");
+  });
+
+  it("never applies an owner outside eligibleAgents, even past the pipeline's own check", () => {
+    const ctx = baseCtx({ config: { enabled: true, mode: "enforce", thresholds: { confidenceMin: 0.7, marginMin: 0.15 }, alwaysAuto: true, options: {} } });
+    const verdict = issueTriagePolicy.decide({ owner: ownerAnswer("agent_NOT_ELIGIBLE", 0.99) }, ctx, baseState({ hasOwner: false }));
+    expect(verdict.fields?.find((f) => f.field === "assigneeAgentId")).toMatchObject({ action: "observe", reason: "ineligible-owner" });
+
+    const stateless = issueTriagePolicy.decide({ owner: ownerAnswer("agent_1", 0.99) }, ctx, undefined);
+    expect(stateless.fields?.find((f) => f.field === "assigneeAgentId")).toMatchObject({ action: "observe", reason: "ineligible-owner" });
   });
 
   it("marks the owner field 'observe' when confidence is below threshold", () => {
@@ -457,6 +467,27 @@ describe("issueTriagePolicy via runPolicy", () => {
     const call = updateIssue.mock.calls[0][0];
     expect(call.patch).toEqual({ assigneeAgentId: "agent_1" });
     expect(call.patch.assigneeUserId).toBeUndefined();
+  });
+
+  it("enforce mode never assigns an owner the provider made up (ODIAA-2473 F1)", async () => {
+    const client = fakeClient({
+      owner: { type: "choice", choice: "agent_NOT_ELIGIBLE", confidence: 0.99, probabilities: { agent_NOT_ELIGIBLE: 0.99, agent_1: 0.01 } },
+    });
+    const updateIssue = vi.fn();
+
+    const run = runPolicy(
+      {
+        policy: issueTriagePolicy,
+        state: baseState({ hasOwner: false }),
+        config: configFor("enforce"),
+        companyId: "company_1",
+        issueId: "issue_1",
+      },
+      { client, db: createFakeDb(), apply: { log: vi.fn(), updateIssue }, suggest: { log: vi.fn(), requestConfirmation: vi.fn() } },
+    );
+
+    await expect(run).rejects.toBeInstanceOf(VerdictValidationError);
+    expect(updateIssue).not.toHaveBeenCalled();
   });
 
   it("enforce mode merges an issueType label onto existing labels instead of replacing them", async () => {
