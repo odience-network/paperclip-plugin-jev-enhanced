@@ -65,8 +65,11 @@ VerdictGuard hooks or the browser tool, which are latency-bound.
 Confidence is not portable across providers, so thresholds are per
 `provider/model`. Built-in defaults from the G5 eval
 (`eval/reports/providers.md`, `src/decision/thresholds.ts`) apply under any
-provider alias. Thresholds resolve in layers: built-in default, then the
-policy's own numbers, then a `"<alias>/<model>"` override. A provider other
+provider alias. Thresholds resolve in layers, the later winning. On the
+baseline: built-in default, then the policy's own numbers, then a
+`"<alias>/<model>"` override. On any other provider the built-in default beats
+the policy's own numbers, which were calibrated on the baseline: policy
+numbers, then built-in default, then the `"<alias>/<model>"` override. A provider other
 than the baseline (`typesafe/jev-1.13.0`) stays in `shadow` mode unless it has
 thresholds, built-in or set by you. Tier B presets never get built-in
 thresholds.

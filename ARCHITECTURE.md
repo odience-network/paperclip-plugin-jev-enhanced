@@ -42,7 +42,10 @@ src/
     thresholds.ts      Built-in per-`(policy, provider, model)` thresholds
                       from the G5 eval (`eval/reports/providers.json`),
                       keyed `<preset or kind>/<model>`; `null` and every
-                      Tier B preset mean shadow-only.
+                      Tier B preset mean shadow-only. On a non-baseline
+                      provider they beat the policy-wide numbers (calibrated
+                      on the baseline); an `<alias>/<model>` override beats
+                      both.
     providers/
       systemone.ts     Generic SystemOne HTTP adapter (baseUrl, optional path,
                       auth header style, secret ref). The only caller of

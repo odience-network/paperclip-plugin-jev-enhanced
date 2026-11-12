@@ -220,9 +220,13 @@ export interface ProviderBinding {
 /** Every policy ships in `shadow` mode until its eval report clears the bar
  * for `enforce` — this is the single place that default is encoded.
  *
- * With a `binding`, thresholds resolve in layers: the built-in eval
- * thresholds for the provider's `defaultsKey`, then the operator's
- * policy-wide numbers, then the operator's `provider/model` override. The
+ * With a `binding`, thresholds resolve in layers, the later winning. On the
+ * baseline: the built-in eval thresholds for its `defaultsKey`, then the
+ * operator's policy-wide numbers (calibrated on the baseline), then the
+ * operator's `provider/model` override. On any other provider the built-in
+ * thresholds beat the policy-wide numbers, which were calibrated on the
+ * baseline and don't carry over: policy-wide numbers, then built-in, then
+ * the override. The
  * mode is held at `shadow` when the provider reports no confidence, or when
  * it isn't the baseline provider and has no thresholds of its own, built-in
  * or operator-set (a policy promoted on one provider is not promoted on
@@ -231,10 +235,11 @@ export function policyConfigFor(config: VerdictConfig, policyName: string, bindi
   const raw = config.policies[policyName] ?? policyConfigSchema.parse({});
 
   const builtIn = binding?.defaultsKey ? defaultThresholdsFor(policyName, binding.defaultsKey) : undefined;
-  const thresholds: Record<string, number> = { ...builtIn };
+  const policyWide: Record<string, number> = {};
   for (const [name, value] of Object.entries(raw.thresholds)) {
-    if (typeof value === "number") thresholds[name] = value;
+    if (typeof value === "number") policyWide[name] = value;
   }
+  const thresholds: Record<string, number> = binding?.baseline ? { ...builtIn, ...policyWide } : { ...policyWide, ...builtIn };
   const override = binding ? raw.thresholds[binding.key] : undefined;
   const hasOverride = typeof override === "object";
   if (hasOverride) Object.assign(thresholds, override);

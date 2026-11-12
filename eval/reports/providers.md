@@ -59,7 +59,9 @@ most decisions through while accuracy among them stays at or above 90% with at l
 the provider stays shadow-only for that policy (the baseline `typesafe/jev-1.13.0` keeps the policy-wide numbers).
 
 These are the built-in defaults in `src/decision/thresholds.ts` (`PROVIDER_THRESHOLD_DEFAULTS`), keyed
-`<preset or kind>/<model>` so they apply whatever alias the operator gives the provider. Operator-set numbers always win.
+`<preset or kind>/<model>` so they apply whatever alias the operator gives the provider. An operator's `<alias>/<model>`
+override always wins. On a provider other than the baseline the built-in defaults beat the policy-wide numbers, which were
+calibrated on the baseline.
 
 | policy | provider/model | confidenceMin / marginMin |
 |---|---|---|

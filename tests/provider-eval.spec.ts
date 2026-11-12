@@ -45,11 +45,42 @@ describe("built-in per-provider thresholds", () => {
     });
   });
 
-  it("lose to the operator's policy-wide numbers, which lose to a per-provider override", () => {
-    const config = parseVerdictConfig({
-      policies: { "comment-triage": { thresholds: { confidenceMin: 0.6, "alias/clef": { marginMin: 0.05 } } } },
+  it("beat the operator's policy-wide numbers on a non-baseline provider", () => {
+    const config = parseVerdictConfig({ policies: { "comment-triage": { mode: "suggest", thresholds: { confidenceMin: 0.7 } } } });
+    expect(policyConfigFor(config, "comment-triage", binding("cloudflare/clef"))).toMatchObject({
+      mode: "suggest",
+      thresholds: { confidenceMin: 0.75, marginMin: 0.3 },
     });
-    expect(policyConfigFor(config, "comment-triage", binding("cloudflare/clef")).thresholds).toEqual({ confidenceMin: 0.6, marginMin: 0.05 });
+  });
+
+  it("lose to an explicit per-provider override on a non-baseline provider", () => {
+    const config = parseVerdictConfig({
+      policies: { "comment-triage": { mode: "suggest", thresholds: { confidenceMin: 0.7, "cf-clef/clef": { confidenceMin: 0.65, marginMin: 0.05 } } } },
+    });
+    const clef = { key: "cf-clef/clef", defaultsKey: "cloudflare/clef", confidence: "native" as const, baseline: false };
+    expect(policyConfigFor(config, "comment-triage", clef)).toMatchObject({
+      mode: "suggest",
+      thresholds: { confidenceMin: 0.65, marginMin: 0.05 },
+    });
+  });
+
+  it("keep policy-wide numbers that have no built-in counterpart on a non-baseline provider", () => {
+    const config = parseVerdictConfig({ policies: { "comment-triage": { thresholds: { maxCandidates: 12 } } } });
+    expect(policyConfigFor(config, "comment-triage", binding("cloudflare/clef")).thresholds).toEqual({
+      maxCandidates: 12,
+      confidenceMin: 0.75,
+      marginMin: 0.3,
+    });
+  });
+
+  it("lose to the operator's policy-wide numbers on the baseline, which lose to its override", () => {
+    const config = parseVerdictConfig({
+      policies: { "comment-triage": { thresholds: { confidenceMin: 0.6, "alias/jev-1.13.0": { marginMin: 0.05 } } } },
+    });
+    expect(policyConfigFor(config, "comment-triage", binding("typesafe/jev-1.13.0", true)).thresholds).toEqual({
+      confidenceMin: 0.6,
+      marginMin: 0.05,
+    });
   });
 
   it("apply even when the policy has no config entry at all", () => {
