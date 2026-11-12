@@ -68,7 +68,9 @@ src/
     rates.ts           Per-provider, per-model rate cards with a version
                       string recorded in the ledger's `rate_version`.
     canonical.ts       Deterministic state canonicalization + SHA-256 hashing.
-    redact.ts          Pattern-based redaction and head/tail truncation.
+    redact.ts          Pattern-based redaction (state and question text)
+                      and head/tail truncation.
+    validate.ts        Checks provider answers against the questions sent.
     cache.ts           In-memory cache keyed by (policy, provider, model,
                       stateHash, questionsHash).
     budget.ts          Daily token/cost budget store, backed by `ctx.state`.
@@ -258,7 +260,10 @@ can be re-acquired afterward (covered by `tests/ledger.spec.ts`).
 
 1. **Canonicalize** state to a deterministic string (`canonical.ts`).
 2. **Redact** configured patterns (`redactionPatterns`), case-insensitively;
-   an invalid pattern is skipped, not thrown.
+   an invalid pattern is skipped, not thrown. Question text is redacted the
+   same way (names, instructions, criteria, choice option keys, with a `#n`
+   suffix where two keys would collide); answers are mapped back to the
+   original names and keys. `questionsHash` is taken after redaction.
 3. **Truncate** head/tail to `maxStateChars` (default `DEFAULT_MAX_STATE_CHARS`).
 4. **Hash** the result (SHA-256) — this hash, not the text, goes in the
    ledger.
@@ -300,7 +305,14 @@ Then, for each provider in the policy's `[primary, ...fallbacks]` chain:
 10. **Budget + cost accounting**: usage is added to the daily budget store;
     cost and `rateVersion` come from the provider's rate card (`rates.ts`).
     Host-billed providers record null cost and no rate version.
-11. **Cache write** on success.
+11. **Answer check** (`validateAnswersAgainst`, `src/decision/validate.ts`)
+    against the questions this provider was sent, after capping: every
+    answer is for an asked question and of its type, a choice and its
+    probability keys are offered options, a score lies within its levels.
+    A violation is `VerdictValidationError` (`invalid_output`), so the chain
+    falls back. Provider output is untrusted: without this a provider could
+    name an agent that was never offered and `enforce` mode would apply it.
+12. **Cache write** on success.
 
 The outcome names the provider that answered, the chain head it was meant
 for, and why the chain moved on (`fallbackFrom`). `runPolicy`,
@@ -352,7 +364,7 @@ Company-scoped, validated by `src/config.ts` (`parseVerdictConfig`):
 
 | Field | Default | Notes |
 |---|---|---|
-| `providers.<id>` | — | `{kind: "systemone", preset, apiKeyRef, model?, baseUrl?, path?, authStyle?}`, `{kind: "cloudflare", accountId, apiKeyRef, model?: "clef" \| "clef-flash", baseUrl?}`, `{kind: "openai", apiKeyRef, model? (gpt-6-luna), baseUrl?}` or `{kind: "core", model?}`. Ids are lowercase letters, digits, dashes. Provider fetches only reach the origins of configured providers |
+| `providers.<id>` | — | `{kind: "systemone", preset, apiKeyRef, model?, baseUrl?, path?, authStyle?}`, `{kind: "cloudflare", accountId, apiKeyRef, model?: "clef" \| "clef-flash", baseUrl?}`, `{kind: "openai", apiKeyRef, model? (gpt-6-luna), baseUrl?}` or `{kind: "core", model?}`. Ids are lowercase letters, digits, dashes. Provider fetches only reach the origins of configured providers. `baseUrl` must be `https:` unless the provider sends no credential (`authStyle: "none"`, no `apiKeyRef`) |
 | `defaultProvider` | `typesafe` (or the first provider) | Used by every policy without its own `provider` |
 | `shadowProviders` | `[]` | Resolved by the registry; called alongside the primary from G5 |
 | `apiKeyRef` | — | Deprecated. With an empty `providers` map, read as `providers.typesafe.apiKeyRef` (warning in `onValidateConfig`) |
@@ -754,8 +766,10 @@ the namespace per the host's normal plugin-uninstall data-retention policy.
 - No raw issue state or free text is ever written to `verdict_decisions` or
   `verdict_feedback` — only hashes, structured answers, scores, and usage
   metadata (enforced by `tests/ledger.spec.ts`).
-- `redactionPatterns` strip sensitive substrings from state text before it
-  leaves the plugin, ahead of canonicalization's hash and the provider call.
+- `redactionPatterns` strip sensitive substrings from state and question
+  text before it leaves the plugin, ahead of the hashes and the provider call.
+- A credentialed provider's `baseUrl` must be `https:`; config validation
+  rejects `http:` unless the provider sends no credential.
 - Every policy defaults to `shadow` mode; `apply/` (the only place with side
   effects) is unreachable except in `enforce` mode.
 - `ask`/`classify-task`/`verify`/`rerank` (the `verdict-*` decision tools and
