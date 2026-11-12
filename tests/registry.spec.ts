@@ -236,7 +236,12 @@ describe("policyConfigFor: provider-bound thresholds and mode", () => {
 
   it("treats the typesafe preset on the pinned default model as the baseline and everything else as not", () => {
     const [typesafeProvider] = buildPolicyProviders(parseVerdictConfig({}), "ping", runtime);
-    expect(providerBinding(typesafeProvider)).toEqual({ key: "typesafe/jev-1.13.0", confidence: "native", baseline: true });
+    expect(providerBinding(typesafeProvider)).toEqual({
+      key: "typesafe/jev-1.13.0",
+      defaultsKey: "typesafe/jev-1.13.0",
+      confidence: "native",
+      baseline: true,
+    });
     expect(providerBinding(new CoreProvider("core", undefined)).baseline).toBe(false);
   });
 
@@ -247,7 +252,7 @@ describe("policyConfigFor: provider-bound thresholds and mode", () => {
       runtime,
     );
     const binding = providerBinding(jev114);
-    expect(binding).toEqual({ key: "typesafe/jev-1.14.0", confidence: "native", baseline: false });
+    expect(binding).toEqual({ key: "typesafe/jev-1.14.0", defaultsKey: "typesafe/jev-1.14.0", confidence: "native", baseline: false });
     expect(policyConfigFor(config, "issue-triage", binding)).toMatchObject({ mode: "shadow" });
 
     const calibrated = parseVerdictConfig({

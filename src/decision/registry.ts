@@ -213,6 +213,7 @@ export function buildPolicyPipeline(
 export function providerBinding(provider: DecisionProvider): ProviderBinding {
   return {
     key: providerModelKey(provider),
+    defaultsKey: `${provider.kind === "systemone" ? (provider.preset ?? provider.kind) : provider.kind}/${provider.model}`,
     confidence: provider.capabilities.confidence,
     baseline: provider.kind === "systemone" && provider.preset === "typesafe" && provider.model === DEFAULT_TYPESAFE_MODEL,
   };

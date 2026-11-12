@@ -30,7 +30,8 @@ src/
                       and `estimateCostUsd()` (returns a `rateVersion`).
     pipeline.ts        `DecisionPipeline`: the provider-agnostic ask
                       pipeline (see "Decision pipeline" below). Runs a
-                      `[primary, ...fallbacks]` chain.
+                      `[primary, ...fallbacks]` chain; `askShadow` asks one
+                      shadow provider alone, never with a fallback.
     registry.ts        Builds providers from the `providers` config map;
                       resolves `defaultProvider`, per-policy `provider`,
                       `fallbackProviders`, `shadowProviders`; reads the
@@ -38,6 +39,10 @@ src/
                       implicit `typesafe` provider; `validateProviderConfig`
                       for `onValidateConfig`; `providerBinding` for
                       threshold/mode resolution.
+    thresholds.ts      Built-in per-`(policy, provider, model)` thresholds
+                      from the G5 eval (`eval/reports/providers.json`),
+                      keyed `<preset or kind>/<model>`; `null` and every
+                      Tier B preset mean shadow-only.
     providers/
       systemone.ts     Generic SystemOne HTTP adapter (baseUrl, optional path,
                       auth header style, secret ref). The only caller of
@@ -205,6 +210,23 @@ eval/
                       new policies. Regenerate with `tsx
                       eval/report-comment-triage.ts` / `tsx
                       eval/report-run-outcome-qa.ts`.
+  live-run.ts           Live shadow run (developer machines only, never
+                      CI): every dataset case through `runPolicy` with
+                      `typesafe/jev-1.13.0` primary and the other Tier A
+                      providers as shadows; writes
+                      `datasets/live/<policy>.ledger.jsonl`.
+  provider-eval.ts, compare.ts
+                        Per-`provider/model` comparison over a ledger
+                      export, grouped by `decision_group_id`: availability
+                      by error class, agreement with the primary, p50
+                      latency, cost per 1k, and with labels accuracy, ECE
+                      and a threshold recommendation.
+  report-providers.ts   Writes `reports/providers.{md,json}`, the source of
+                      `src/decision/thresholds.ts`.
+  import-training-export.ts
+                        Maps core's `decision-training/export.jsonl` onto
+                      comment-triage and run-outcome-qa eval datasets, text
+                      and ids hashed by default.
 migrations/
   001_verdict_tables.sql    `verdict_decisions` / `verdict_feedback` DDL.
 ```

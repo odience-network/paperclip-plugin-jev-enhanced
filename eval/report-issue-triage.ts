@@ -10,8 +10,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { issueTriagePolicy, confidenceMarginFor, type IssueTriageState } from "../src/policies/issue-triage.js";
 import type { Policy, PolicyContext } from "../src/policies/types.js";
-import { loadJsonlDataset } from "./dataset.js";
+import { loadJsonlDataset, providerModelOfCase } from "./dataset.js";
 import { summarize } from "./metrics.js";
+import { liveProviderSection } from "./provider-eval.js";
 import type { CalibrationReportJson, EvalCase, EvalResult } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -36,6 +37,7 @@ function decideAll(
       correct: verdict.verdict === evalCase.expectedVerdict,
       latencyMs: evalCase.latencyMs,
       costUsd: evalCase.costUsd,
+      providerModel: providerModelOfCase(evalCase),
     };
   });
 }
@@ -254,7 +256,13 @@ function main() {
     console.log(`No local ${realDatasetPath} found; skipping the real-issue report section.`);
   }
 
-  const markdown = toMarkdown({ datasetSize: cases.length, metrics, sweep, questionStats, recommendation }) + realSection;
+  const liveSection = liveProviderSection(
+    issueTriagePolicy as Policy,
+    cases,
+    join(__dirname, "datasets", "live", "issue-triage.ledger.jsonl"),
+    DEFAULT_THRESHOLDS,
+  );
+  const markdown = toMarkdown({ datasetSize: cases.length, metrics, sweep, questionStats, recommendation }) + liveSection + realSection;
 
   const outPath = join(__dirname, "reports", "issue-triage.md");
   mkdirSync(dirname(outPath), { recursive: true });

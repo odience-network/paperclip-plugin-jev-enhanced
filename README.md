@@ -47,6 +47,30 @@ calls can only reach the hosts of configured providers. OpenAI's
 `refusal` answers fail the call with error code `refused`; they are never
 turned into an answer, and the chain does not fall back on them.
 
+### Shadow providers and per-provider thresholds
+
+`shadowProviders` lists providers asked alongside each policy's primary on
+live traffic, for comparison only. Each shadow is asked alone (never a
+fallback chain), recorded as a `shadow`-mode ledger row under the primary's
+`decision_group_id`, and never applied or suggested. A failing shadow is an
+`error` row with its `error_class`. Shadow calls count against the daily
+token budget. They run for policies driven through `runPolicy` (issue-triage,
+comment-triage, run-outcome-qa and the `verdict-*` tools), not for
+VerdictGuard hooks or the browser tool, which are latency-bound.
+
+```jsonc
+{ "defaultProvider": "typesafe", "shadowProviders": ["typesafe-114", "cf-clef", "luna"] }
+```
+
+Confidence is not portable across providers, so thresholds are per
+`provider/model`. Built-in defaults from the G5 eval
+(`eval/reports/providers.md`, `src/decision/thresholds.ts`) apply under any
+provider alias. Thresholds resolve in layers: built-in default, then the
+policy's own numbers, then a `"<alias>/<model>"` override. A provider other
+than the baseline (`typesafe/jev-1.13.0`) stays in `shadow` mode unless it has
+thresholds, built-in or set by you. Tier B presets never get built-in
+thresholds.
+
 ### Secrets
 
 Provider keys are vault secrets bound to `plugin:odience.verdict` and
@@ -346,3 +370,46 @@ pnpm build
 See `ARCHITECTURE.md` for the full module map and `eval/` for the
 recorded-fixture eval runner used to gate a policy's promotion from
 `shadow` to `enforce`.
+
+### Comparing providers (`eval/compare.ts`)
+
+`eval/compare.ts` reads a ledger export, groups rows by `decision_group_id`
+(a primary decision and its shadow decisions) and reports per
+`provider/model` (the provider that answered): availability with
+non-answers by error class, agreement with the primary per question and per
+verdict, p50 latency and cost per 1k decisions. With a labelled dataset it
+also reports accuracy, ECE (10 equal-width bins) and a threshold
+recommendation. Errored and skipped rows never enter accuracy or ECE.
+
+```sh
+# A production export: one ledger row per line, camelCase DecisionRow or raw
+# snake_case verdict_decisions rows. Agreement, availability, latency, cost.
+tsx eval/compare.ts --export decisions.jsonl --policy comment-triage
+
+# With labels: case ids in the dataset must match the rows' issueId.
+tsx eval/compare.ts --export eval/datasets/live/comment-triage.ledger.jsonl \
+  --policy comment-triage --dataset eval/datasets/comment-triage.jsonl --out report.md
+```
+
+To get a ledger export from Postgres:
+
+```sql
+COPY (SELECT row_to_json(d) FROM plugin_verdict_acf66b4489.verdict_decisions d
+      WHERE company_id = '<company>' AND decision_group_id IS NOT NULL) TO STDOUT;
+```
+
+The committed per-provider report is built in three steps. The first runs on
+a developer machine with the `.env` tokens and never in CI. It sends every
+dataset case through `runPolicy` with TypeSafe 1.13 as primary and the other
+Tier A providers as shadows, and writes `eval/datasets/live/<policy>.ledger.jsonl`:
+
+```sh
+tsx eval/live-run.ts --policy comment-triage --env-file .env
+tsx eval/report-providers.ts   # offline: eval/reports/providers.{md,json}
+```
+
+`eval/import-training-export.ts` turns Paperclip core's labelled human
+decisions (`GET /api/companies/{companyId}/decision-training/export.jsonl`,
+board-only) into eval datasets for comment-triage and run-outcome-qa. It
+replaces all text and ids with hashes unless `--keep-text` is given, which
+only writes under the gitignored `eval/results/`.

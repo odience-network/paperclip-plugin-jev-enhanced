@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CLOUDFLARE_MODELS } from "./decision/providers/cloudflare.js";
+import { defaultThresholdsFor } from "./decision/thresholds.js";
 
 export const POLICY_MODES = ["shadow", "suggest", "enforce"] as const;
 export type PolicyMode = (typeof POLICY_MODES)[number];
@@ -207,6 +208,9 @@ export type VerdictConfig = z.infer<typeof verdictConfigSchema>;
 export interface ProviderBinding {
   /** `"<provider>/<model>"`, the key per-provider thresholds are stored under. */
   key: string;
+  /** `"<preset or kind>/<model>"`, the key built-in eval thresholds
+   * (`PROVIDER_THRESHOLD_DEFAULTS`) are looked up by. */
+  defaultsKey?: string;
   confidence: "native" | "derived" | "none";
   /** True for the provider today's thresholds and modes were calibrated on
    * (TypeSafe Jev). A mode set while running on it carries over unchanged. */
@@ -216,25 +220,28 @@ export interface ProviderBinding {
 /** Every policy ships in `shadow` mode until its eval report clears the bar
  * for `enforce` — this is the single place that default is encoded.
  *
- * With a `binding`, thresholds resolve by `provider/model` with fallback to
- * the policy-wide numbers, and the mode is held at `shadow` when the provider
- * reports no confidence, or when it isn't the baseline provider and has no
- * thresholds of its own (a policy promoted on one provider is not promoted on
+ * With a `binding`, thresholds resolve in layers: the built-in eval
+ * thresholds for the provider's `defaultsKey`, then the operator's
+ * policy-wide numbers, then the operator's `provider/model` override. The
+ * mode is held at `shadow` when the provider reports no confidence, or when
+ * it isn't the baseline provider and has no thresholds of its own, built-in
+ * or operator-set (a policy promoted on one provider is not promoted on
  * another until it's calibrated there). */
 export function policyConfigFor(config: VerdictConfig, policyName: string, binding?: ProviderBinding): PolicyConfig {
-  const raw = config.policies[policyName];
-  if (!raw) return { enabled: true, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {} };
+  const raw = config.policies[policyName] ?? policyConfigSchema.parse({});
 
-  const thresholds: Record<string, number> = {};
+  const builtIn = binding?.defaultsKey ? defaultThresholdsFor(policyName, binding.defaultsKey) : undefined;
+  const thresholds: Record<string, number> = { ...builtIn };
   for (const [name, value] of Object.entries(raw.thresholds)) {
     if (typeof value === "number") thresholds[name] = value;
   }
   const override = binding ? raw.thresholds[binding.key] : undefined;
   const hasOverride = typeof override === "object";
   if (hasOverride) Object.assign(thresholds, override);
+  const calibrated = hasOverride || Boolean(builtIn);
 
   let mode = raw.mode;
-  if (binding && mode !== "shadow" && (binding.confidence === "none" || (!binding.baseline && !hasOverride))) {
+  if (binding && mode !== "shadow" && (binding.confidence === "none" || (!binding.baseline && !calibrated))) {
     mode = "shadow";
   }
   return { ...raw, thresholds, mode };

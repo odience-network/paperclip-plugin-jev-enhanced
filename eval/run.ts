@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { policies } from "../src/policies/index.js";
 import type { Policy, PolicyContext } from "../src/policies/types.js";
-import { loadJsonlDataset } from "./dataset.js";
+import { loadJsonlDataset, providerModelOfCase } from "./dataset.js";
 import { summarize } from "./metrics.js";
 import type { CalibrationReportJson, EvalCase, EvalResult } from "./types.js";
 
@@ -38,6 +38,7 @@ function decideAll(policy: Policy, cases: EvalCase[], thresholds: Record<string,
       correct: verdict.verdict === evalCase.expectedVerdict,
       latencyMs: evalCase.latencyMs,
       costUsd: evalCase.costUsd,
+      providerModel: providerModelOfCase(evalCase),
     };
   });
 }
@@ -68,8 +69,16 @@ export function runEval(policyName: string, datasetPath: string) {
   const results = decideAll(policy, cases, {});
   const metrics = summarize(results);
   const sweep = sweepThresholds(policy, cases);
+  // Calibration is per provider/model, never pooled: a dataset mixing
+  // providers' answers also gets one summary per provider.
+  const byProvider = Object.fromEntries(
+    [...new Set(results.map((result) => result.providerModel))].map((key) => [
+      key,
+      summarize(results.filter((result) => result.providerModel === key)),
+    ]),
+  );
 
-  return { policy: policyName, results, metrics, thresholdSweep: sweep };
+  return { policy: policyName, results, metrics, byProvider, thresholdSweep: sweep };
 }
 
 function main() {
