@@ -103,8 +103,14 @@ export function buildProvider(id: string, providerConfig: ProviderConfig, runtim
 }
 
 /** Which host receives state text, and its published retention. Shown next
- * to each provider in the health widget. */
+ * to each provider in the health widget. A `baseUrl` that moves the provider
+ * off its known host gets a neutral line naming that origin instead: the
+ * known host's retention says nothing about where the request now goes. */
 export function providerDisclosure(providerConfig: ProviderConfig): string {
+  const origin = providerOrigin(providerConfig);
+  if (origin !== null && origin !== knownOrigin(providerConfig)) {
+    return `Sends redacted state text to ${origin} (custom base URL; retention unknown).`;
+  }
   switch (providerConfig.kind) {
     case "systemone":
       return SYSTEMONE_PRESETS[providerConfig.preset]?.disclosure ?? `Sends redacted state text to ${providerOrigin(providerConfig)}.`;
@@ -145,6 +151,11 @@ function providerOrigin(providerConfig: ProviderConfig): string | null {
     case "core":
       return null;
   }
+}
+
+/** The origin a provider kind (or preset) sends to with no `baseUrl` override. */
+function knownOrigin(providerConfig: ProviderConfig): string | null {
+  return providerOrigin({ ...providerConfig, baseUrl: undefined } as ProviderConfig);
 }
 
 /** Origins provider calls may reach: exactly the hosts of the configured

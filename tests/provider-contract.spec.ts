@@ -11,7 +11,7 @@ import { runPolicy } from "../src/policies/run.js";
 import { pingPolicy } from "../src/policies/ping.js";
 import type { DecisionQuestions } from "../src/decision/types.js";
 import { createFakeDb } from "./helpers/fake-db.js";
-import { startMockSystemOneServer, syntheticSystemOneReply, type MockSystemOneServer } from "./helpers/mock-systemone-server.js";
+import { plainHttpFetch, startMockSystemOneServer, syntheticSystemOneReply, type MockSystemOneServer } from "./helpers/mock-systemone-server.js";
 
 /**
  * L1 contract suite (plan 2.3b). Every SystemOne-shaped provider configuration
@@ -87,6 +87,7 @@ function runtime(overrides: Partial<ProviderRuntime> = {}): ProviderRuntime {
     resolveSecret: async () => TEST_KEY,
     timeoutMs: 2_000,
     retry: { maxRetries: 0, backoffInitialMs: 1, backoffMaxMs: 1 },
+    fetchImpl: plainHttpFetch,
     ...overrides,
   };
 }
@@ -118,7 +119,7 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
   });
 
   it("posts the SystemOne body to the configured path with the configured auth", async () => {
-    const provider = providerFor(contract, server.baseUrl);
+    const provider = providerFor(contract, server.secureBaseUrl);
     const pipeline = new DecisionPipeline({ providers: [provider] });
 
     const outcome = await pipeline.ask({ policy: "contract", companyId: "c1", state: { b: 2, a: 1 }, questions: MIXED_QUESTIONS });
@@ -146,7 +147,7 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
   });
 
   it("lists models from the configured models path", async () => {
-    const provider = providerFor(contract, server.baseUrl);
+    const provider = providerFor(contract, server.secureBaseUrl);
     const models = await provider.listModels?.();
     expect(models).toEqual([{ name: "mock-model", description: "synthetic", release_date: "2026-01-01" }]);
     expect(server.requests[0].path).toBe(contract.expectedModelsPath);
@@ -155,7 +156,7 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
   });
 
   it("redacts state before egress and never writes raw state to the ledger", async () => {
-    const provider = providerFor(contract, server.baseUrl);
+    const provider = providerFor(contract, server.secureBaseUrl);
     const pipeline = new DecisionPipeline({ providers: [provider], redactionPatterns: ["secret-\\d+"] });
     const db = createFakeDb();
     const writes: unknown[] = [];
@@ -182,7 +183,7 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
   });
 
   it("refuses a question set over the provider's caps before any call", async () => {
-    const provider = providerFor(contract, server.baseUrl);
+    const provider = providerFor(contract, server.secureBaseUrl);
     const pipeline = new DecisionPipeline({ providers: [provider] });
     const tooManyOptions = Object.fromEntries(Array.from({ length: provider.capabilities.maxChoiceOptions + 1 }, (_, i) => [`o${i}`, null]));
     const tooManyLevels = Array.from({ length: provider.capabilities.maxScoreLevels + 1 }, (_, i) => `level ${i}`);
@@ -214,14 +215,14 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
     { status: 422, code: "provider-error-422" },
   ])("maps HTTP $status to $code", async ({ status, code }) => {
     server.respondWith(() => ({ status, body: { error: { message: "nope" } } }));
-    const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.baseUrl)] });
+    const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.secureBaseUrl)] });
 
     const error = await pipeline.ask({ policy: "contract", companyId: "c1", state: "s", questions: MIXED_QUESTIONS }).catch((e) => e);
     expect(classifyError(error)).toBe(code);
   });
 
   it("maps a malformed body and a model-echo mismatch to validation-failed", async () => {
-    const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.baseUrl)] });
+    const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.secureBaseUrl)] });
     // SDK 0.7.0 refuses a question with neither instructions nor criteria
     // before sending, so the question carries instructions.
     const ask = () =>
@@ -235,7 +236,7 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
   });
 
   it("derives a missing choice/score confidence with the canonical formulas and records the source", async () => {
-    const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.baseUrl)] });
+    const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.secureBaseUrl)] });
     const native = await pipeline.ask({ policy: "contract", companyId: "c1", state: "native", questions: MIXED_QUESTIONS });
     expect(native.confidenceSource).toBe("native");
     expect(native.result.answers.pick).toMatchObject({ confidence: 0.9 });
@@ -255,7 +256,7 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
     expect(answeredByFields(derived).confidenceSource).toBe("derived");
 
     // A cache hit keeps the source of the answer it replays.
-    const cachedPipeline = new DecisionPipeline({ providers: [providerFor(contract, server.baseUrl)], cache: createInMemoryVerdictCache() });
+    const cachedPipeline = new DecisionPipeline({ providers: [providerFor(contract, server.secureBaseUrl)], cache: createInMemoryVerdictCache() });
     await cachedPipeline.ask({ policy: "contract", companyId: "c1", state: "derived", questions: MIXED_QUESTIONS });
     const hit = await cachedPipeline.ask({ policy: "contract", companyId: "c1", state: "derived", questions: MIXED_QUESTIONS });
     expect(hit).toMatchObject({ cached: true, confidenceSource: "derived" });
@@ -263,14 +264,14 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
 
   it("maps a slow server to timeout", async () => {
     server.respondWith((request) => ({ ...syntheticSystemOneReply(request), delayMs: 500 }));
-    const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.baseUrl, { timeoutMs: 50 })] });
+    const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.secureBaseUrl, { timeoutMs: 50 })] });
 
     const error = await pipeline.ask({ policy: "contract", companyId: "c1", state: "s", questions: MIXED_QUESTIONS }).catch((e) => e);
     expect(classifyError(error)).toBe("timeout");
   });
 
   it("estimates cost from the preset's rate card and records its version", async () => {
-    const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.baseUrl)] });
+    const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.secureBaseUrl)] });
 
     const outcome = await pipeline.ask({ policy: "contract", companyId: "c1", state: "s", questions: MIXED_QUESTIONS });
 

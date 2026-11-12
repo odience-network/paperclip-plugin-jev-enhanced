@@ -39,12 +39,29 @@ assume the hooks live at `<repo>/hooks/`; adjust if installed elsewhere.
 Each hook has a short `timeout` so a slow/unreachable plugin can't stall
 every tool call beyond the harness's own client-side timeout.
 
+The `PreToolUse`/`PostToolUse` matcher excludes MCP tools. Claude Code names
+them `mcp__<server>__<tool>`, so a `"*"` matcher also catches them, and Paperclip
+core's MCP tool gateway already governs them: risk class, `allow | block |
+require_approval | rate_limit | trust_rule` policies, approval cards. If
+VerdictGuard also ran on them, it could override an operator's core trust rule,
+or put a second prompt next to core's approval card for the same call. In a
+headless run that `ask` would stall the run with no card to answer. VerdictGuard
+covers harness-native tools (Bash, Edit, Write, browser actions) and `Stop`.
+See "Scope versus core's MCP tool gateway" in `docs/SECURITY.md`.
+
+The matcher is a regex, so `^(?!mcp__).*` matches every tool except MCP tools.
+If your Claude Code version doesn't take lookaheads, list the native tools
+instead, e.g. `"Bash|Edit|MultiEdit|Write|NotebookEdit|WebFetch"`. A
+`"*"` left in place doesn't break anything: `guard/evaluate` answers any
+`mcp__*` call with `allow` / `governed-by-core-tool-gateway` without calling a
+provider. Each such call still costs a hook round trip, though.
+
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "*",
+        "matcher": "^(?!mcp__).*",
         "hooks": [
           {
             "type": "command",
@@ -56,7 +73,7 @@ every tool call beyond the harness's own client-side timeout.
     ],
     "PostToolUse": [
       {
-        "matcher": "*",
+        "matcher": "^(?!mcp__).*",
         "hooks": [
           {
             "type": "command",
