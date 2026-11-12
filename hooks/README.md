@@ -1,7 +1,7 @@
 # VerdictGuard harness hooks
 
 Claude Code `PreToolUse`/`PostToolUse`/`Stop` hooks that call this plugin's
-`POST /plugins/odience.verdict/api/guard/evaluate` route before/after each tool
+`POST /api/plugins/odience.verdict/api/guard/evaluate` route before/after each tool
 call and before the agent stops. No plugin SDK dependency — plain Node
 (`>=18`, for built-in `fetch`) so they run inside the coding agent's own
 sandbox without an install step.
@@ -18,7 +18,7 @@ releases — treat a mismatch as a harness bug to fix, not a plugin bug.
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `PAPERCLIP_API_URL` | yes | Base URL of the Paperclip instance, e.g. `http://127.0.0.1:3100` |
+| `PAPERCLIP_API_URL` | yes | Base URL of the Paperclip instance, e.g. `http://127.0.0.1:3100` (a trailing `/api` is also accepted) |
 | `PAPERCLIP_AGENT_API_KEY` | yes | This agent's own API key (never a board/human key — see docs/SECURITY.md) |
 | `PAPERCLIP_COMPANY_ID` | yes | Company id for the current run |
 | `PAPERCLIP_RUN_ID` | yes | Id correlating all hook calls in this run (loop guard, audit trail) |

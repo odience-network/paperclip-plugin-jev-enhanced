@@ -109,6 +109,27 @@ describe("evaluateGuard transport fallback", () => {
     const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(sentBody.companyId).toBe("company_1");
   });
+
+  // Paperclip mounts plugin routes as `/api/plugins/:pluginId/api/*` (the
+  // plugin router lives inside `app.use("/api", ...)`). A bare
+  // `/plugins/...` path never reaches it, 404s, and fails open.
+  it.each([
+    ["bare origin", "http://127.0.0.1:3100"],
+    ["origin with trailing slash", "http://127.0.0.1:3100/"],
+    ["origin with /api", "http://127.0.0.1:3100/api"],
+    ["origin with /api/", "http://127.0.0.1:3100/api/"],
+  ])("posts to the host's /api plugin mount when PAPERCLIP_API_URL is the %s", async (_label, apiUrl) => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ decision: "allow", reason: "ok", confidence: 1, latencyMs: 1, rail: false, intendedDecision: "allow" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await evaluateGuard({ ...baseEnv, apiUrl }, { hookKind: "PreToolUse" });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:3100/api/plugins/odience.verdict/api/guard/evaluate",
+    );
+  });
 });
 
 describe("lastAssistantMessage", () => {
