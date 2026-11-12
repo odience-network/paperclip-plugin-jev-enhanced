@@ -45,20 +45,21 @@ const CAPS: ProviderCapabilities = {
 /** A scripted in-memory provider for pipeline/runPolicy tests. */
 function scriptedProvider(
   id: string,
-  options: { noul?: number; fail?: Error; caps?: Partial<ProviderCapabilities>; preset?: string } = {},
+  options: { noul?: number; fail?: Error; caps?: Partial<ProviderCapabilities>; preset?: string; model?: string } = {},
 ): DecisionProvider & { decide: ReturnType<typeof vi.fn> } {
+  const model = options.model ?? `${id}-model`;
   return {
     id,
     kind: "systemone",
     preset: options.preset ?? "custom",
-    model: `${id}-model`,
+    model,
     capabilities: { ...CAPS, ...options.caps },
     verification: "fixtures",
     availability: async () => ({ ok: true }),
     decide: vi.fn(async () => {
       if (options.fail) throw options.fail;
       return {
-        model: `${id}-model`,
+        model,
         answers: { pong: { type: "noul" as const, noul: options.noul ?? 0.9 } },
         usage: { input_tokens: 10, output_tokens: 1 },
       };
@@ -159,6 +160,32 @@ describe("registry: resolution", () => {
 
     const onCapableHost = validateProviderConfig(parseVerdictConfig({ providers: { core: { kind: "core" } }, defaultProvider: "core" }), hostWithDecisions);
     expect(onCapableHost).toEqual({ errors: [], warnings: [] });
+  });
+
+  it("allows only pinned TypeSafe models, after alias resolution", () => {
+    const withModel = (model: string) =>
+      validateProviderConfig(parseVerdictConfig({ providers: { typesafe: { kind: "systemone", preset: "typesafe", apiKeyRef: "r", model } } }), undefined);
+    for (const model of ["jev-1.13.0", "jev-1.14.0", "jev-latest", "latest", "jev-preview"]) {
+      expect(withModel(model).errors).toEqual([]);
+    }
+    expect(withModel("jev-1.15.0").errors).toEqual([
+      'providers.typesafe: model "jev-1.15.0" is not an allowed typesafe model (jev-1.13.0, jev-1.14.0).',
+    ]);
+    // The deprecated top-level model goes through the same check.
+    expect(validateProviderConfig(parseVerdictConfig({ apiKeyRef: "r", model: "jev-1.12.0" }), undefined).errors).toHaveLength(1);
+    // Another SystemOne server reusing the preset's defaults has its own models.
+    const elsewhere = parseVerdictConfig({
+      providers: { local: { kind: "systemone", preset: "typesafe", baseUrl: "http://localhost:8000", authStyle: "none", model: "custom-decider-1" } },
+    });
+    expect(validateProviderConfig(elsewhere, undefined).errors).toEqual([]);
+  });
+
+  it("keeps jev-1.13.0 the default and resolves every alias to it, never to the provider-side alias", () => {
+    const modelFor = (model?: string) =>
+      buildPolicyProviders(parseVerdictConfig({ providers: { typesafe: { kind: "systemone", preset: "typesafe", apiKeyRef: "r", model } } }), "ping", runtime)[0].model;
+    expect(modelFor()).toBe("jev-1.13.0");
+    for (const alias of ["jev-latest", "latest", "jev-preview"]) expect(modelFor(alias)).toBe("jev-1.13.0");
+    expect(modelFor("jev-1.14.0")).toBe("jev-1.14.0");
   });
 
   it("rejects provider kinds this build can't construct yet", () => {
@@ -267,10 +294,26 @@ describe("policyConfigFor: provider-bound thresholds and mode", () => {
     expect(policyConfigFor(config, "issue-triage", { key: "cf-clef/clef-flash", confidence: "none", baseline: false }).mode).toBe("shadow");
   });
 
-  it("treats the typesafe preset as the baseline and everything else as not", () => {
+  it("treats the typesafe preset on the pinned default model as the baseline and everything else as not", () => {
     const [typesafeProvider] = buildPolicyProviders(parseVerdictConfig({}), "ping", runtime);
     expect(providerBinding(typesafeProvider)).toEqual({ key: "typesafe/jev-1.13.0", confidence: "native", baseline: true });
     expect(providerBinding(new CoreProvider("core", undefined)).baseline).toBe(false);
+  });
+
+  it("holds typesafe/jev-1.14.0 in shadow until it has thresholds of its own", () => {
+    const [jev114] = buildPolicyProviders(
+      parseVerdictConfig({ providers: { typesafe: { kind: "systemone", preset: "typesafe", apiKeyRef: "r", model: "jev-1.14.0" } } }),
+      "ping",
+      runtime,
+    );
+    const binding = providerBinding(jev114);
+    expect(binding).toEqual({ key: "typesafe/jev-1.14.0", confidence: "native", baseline: false });
+    expect(policyConfigFor(config, "issue-triage", binding)).toMatchObject({ mode: "shadow" });
+
+    const calibrated = parseVerdictConfig({
+      policies: { "issue-triage": { mode: "suggest", thresholds: { confidenceMin: 0.7, "typesafe/jev-1.14.0": { confidenceMin: 0.75 } } } },
+    });
+    expect(policyConfigFor(calibrated, "issue-triage", binding)).toMatchObject({ mode: "suggest", thresholds: { confidenceMin: 0.75 } });
   });
 });
 
@@ -443,7 +486,7 @@ describe("runPolicy with providers", () => {
 
   it("keeps the configured mode on the baseline provider", async () => {
     const db = createFakeDb();
-    const primary = scriptedProvider("typesafe", { preset: "typesafe" });
+    const primary = scriptedProvider("typesafe", { preset: "typesafe", model: "jev-1.13.0" });
     const result = await runPolicy(
       { policy: pingPolicy, state: { message: "ping" }, config: suggestConfig, companyId: "c1", issueId: "i1" },
       { client: new DecisionPipeline({ providers: [primary] }), db, apply: { log: vi.fn() }, suggest: { log: vi.fn() } },

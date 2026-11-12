@@ -48,6 +48,30 @@ describe("ledger/decisions", () => {
     expect(after?.stateHash).toBe("abc123");
     expect(after?.confidence).toBe(0.9);
     expect(after?.answers).toEqual({ pong: { type: "noul", noul: 0.9 } });
+    expect(after?.confidenceSource).toBeNull();
+  });
+
+  it("records whether choice/score confidences were native or derived", async () => {
+    const db = createFakeDb();
+    const id = await beginDecision(db, {
+      companyId: "company_1",
+      issueId: "issue_1",
+      policy: "triage",
+      policyVersion: "1.0.0",
+      questionVersion: "1.0.0",
+      model: "pplx-decider-v1.2",
+      mode: "shadow",
+    });
+    await completeDecision(db, id, {
+      stateHash: "abc123",
+      answers: { pick: { type: "choice", choice: "a", probabilities: { a: 0.6, b: 0.4 }, confidence: 0.2 } },
+      latencyMs: 80,
+      usage: { input_tokens: 10, output_tokens: 0 },
+      costUsd: 0,
+      outcome: "observed",
+      confidenceSource: "derived",
+    });
+    expect((await getDecisionById(db, "company_1", id))?.confidenceSource).toBe("derived");
   });
 
   it("never persists free text or raw state — only policy, hash, and outcome fields", async () => {

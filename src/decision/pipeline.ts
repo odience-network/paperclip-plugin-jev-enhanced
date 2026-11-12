@@ -4,6 +4,7 @@ import { cacheKeyFor, type VerdictCache } from "./cache.js";
 import { BudgetExceededError, utcDateKey, type BudgetStore } from "./budget.js";
 import { Semaphore } from "./semaphore.js";
 import { CapabilityError, errorClassOf, shouldFallBack, type CapabilityReason, type ErrorClass } from "./errors.js";
+import type { ConfidenceSource } from "./confidence.js";
 import type { DecisionProvider, ModelCard, ProviderKind } from "./provider.js";
 import { canonicalQuestionType, type DecisionQuestions, type DecisionResult } from "./types.js";
 import { validateAnswersAgainst } from "./validate.js";
@@ -91,6 +92,8 @@ export interface VerdictAskOutcome {
    * when the primary answered. */
   fallbackFrom: ErrorClass | CapabilityReason | null;
   hostInvocationId: string | null;
+  /** `null` when no answer carries a confidence (boolean-only questions). */
+  confidenceSource: ConfidenceSource | null;
 }
 
 /**
@@ -245,6 +248,7 @@ export class DecisionPipeline {
         rateVersion: null,
         provider,
         hostInvocationId: null,
+        confidenceSource: cached.confidenceSource ?? null,
       };
     }
 
@@ -257,7 +261,7 @@ export class DecisionPipeline {
       }
     }
 
-    const { hostInvocationId, ...decided } = await this.semaphore.run(() =>
+    const { hostInvocationId, confidenceSource, ...decided } = await this.semaphore.run(() =>
       provider.decide(
         { state: truncated, questions: sent.questions, model: provider.model },
         // Measured once the semaphore admits the call, so queueing counts
@@ -280,7 +284,7 @@ export class DecisionPipeline {
     validateAnswersAgainst(sent.questions, decided.answers);
     const result = { ...decided, answers: sent.restore(decided.answers) };
 
-    this.cache?.set(cacheKey, { result, cachedAt: Date.now() });
+    this.cache?.set(cacheKey, { result, confidenceSource: confidenceSource ?? null, cachedAt: Date.now() });
     return {
       result,
       stateHash,
@@ -290,6 +294,7 @@ export class DecisionPipeline {
       rateVersion: cost?.rateVersion ?? null,
       provider,
       hostInvocationId: hostInvocationId ?? null,
+      confidenceSource: confidenceSource ?? null,
     };
   }
 }
@@ -303,5 +308,6 @@ export function answeredByFields(outcome: VerdictAskOutcome) {
     fallbackFrom: outcome.fallbackFrom,
     rateVersion: outcome.rateVersion,
     hostInvocationId: outcome.hostInvocationId,
+    confidenceSource: outcome.confidenceSource,
   };
 }

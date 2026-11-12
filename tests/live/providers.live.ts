@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DecisionPipeline } from "../../src/decision/pipeline.js";
 import type { DecisionProvider } from "../../src/decision/provider.js";
 import { classifyError } from "../../src/decision/errors.js";
+import { TYPESAFE_MODELS } from "../../src/decision/models.js";
 import { CloudflareProvider, type CloudflareModel } from "../../src/decision/providers/cloudflare.js";
 import { OpenAiProvider } from "../../src/decision/providers/openai.js";
 import { SYSTEMONE_PRESETS } from "../../src/decision/providers/presets.js";
@@ -32,6 +33,18 @@ interface LiveTarget {
 }
 
 const NOT_ANSWERABLE = /^(provider-error-4\d\d|validation-failed)$/;
+// Carries instructions: the TypeSafe SDK (0.7.0+) refuses a bare question
+// before sending, which would mask the provider's own 4xx.
+const NOT_ANSWERABLE_QUESTIONS: DecisionQuestions = { q: { type: "boolean", instructions: "Is this a refund request?" } };
+const typesafe = (model: string, token: string, http: { timeoutMs?: number; retry?: { maxRetries: number } }) =>
+  new SystemOneProvider({
+    id: "typesafe",
+    preset: SYSTEMONE_PRESETS.typesafe,
+    baseUrl: process.env.VERDICT_LIVE_TYPESAFE_BASE_URL || undefined,
+    model,
+    resolveApiKey: async () => token,
+    ...http,
+  });
 const cloudflare = (model: string, token: string) =>
   new CloudflareProvider({
     id: `cloudflare-${model}`,
@@ -43,38 +56,25 @@ const cloudflare = (model: string, token: string) =>
   });
 
 const LIVE_TARGETS: LiveTarget[] = [
-  {
-    name: "typesafe",
-    tokenVar: "VERDICT_LIVE_TYPESAFE_TOKEN",
-    build: (token) =>
-      new SystemOneProvider({
-        id: "typesafe",
-        preset: SYSTEMONE_PRESETS.typesafe,
-        baseUrl: process.env.VERDICT_LIVE_TYPESAFE_BASE_URL || undefined,
-        resolveApiKey: async () => token,
-        timeoutMs: 30_000,
-      }),
-    refusal: {
-      build: (token) =>
-        new SystemOneProvider({
-          id: "typesafe",
-          preset: SYSTEMONE_PRESETS.typesafe,
-          baseUrl: process.env.VERDICT_LIVE_TYPESAFE_BASE_URL || undefined,
-          model: "verdict-live-smoke-no-such-model",
-          resolveApiKey: async () => token,
-          retry: { maxRetries: 0 },
-        }),
-      questions: { q: { type: "boolean" } },
-      code: NOT_ANSWERABLE,
-    },
-  },
+  ...TYPESAFE_MODELS.map(
+    (model): LiveTarget => ({
+      name: `typesafe/${model}`,
+      tokenVar: "VERDICT_LIVE_TYPESAFE_TOKEN",
+      build: (token) => typesafe(model, token, { timeoutMs: 30_000 }),
+      refusal: {
+        build: (token) => typesafe("verdict-live-smoke-no-such-model", token, { retry: { maxRetries: 0 } }),
+        questions: NOT_ANSWERABLE_QUESTIONS,
+        code: NOT_ANSWERABLE,
+      },
+    }),
+  ),
   ...(["clef", "clef-flash"] as const).map(
     (model): LiveTarget => ({
       name: `cloudflare/${model}`,
       tokenVar: "VERDICT_LIVE_CLOUDFLARE_TOKEN",
       extraVars: ["VERDICT_LIVE_CLOUDFLARE_ACCOUNT_ID"],
       build: (token) => cloudflare(model, token),
-      refusal: { build: (token) => cloudflare("verdict-live-smoke-no-such-model", token), questions: { q: { type: "boolean" } }, code: NOT_ANSWERABLE },
+      refusal: { build: (token) => cloudflare("verdict-live-smoke-no-such-model", token), questions: NOT_ANSWERABLE_QUESTIONS, code: NOT_ANSWERABLE },
     }),
   ),
   {

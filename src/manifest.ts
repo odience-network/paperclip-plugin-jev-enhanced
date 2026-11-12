@@ -81,7 +81,8 @@ const manifest: PaperclipPluginManifestV1 = {
         title: "Model (deprecated)",
         description:
           `Pinned TypeSafe model version for the implicit "typesafe" provider (default ${DEFAULT_TYPESAFE_MODEL}). ` +
-          "Aliases such as \"jev-latest\" resolve to a pinned version before use.",
+          "Allowed: jev-1.13.0, jev-1.14.0 (shadow-only until it has thresholds of its own). " +
+          "Aliases (\"jev-latest\", \"latest\", \"jev-preview\") resolve to the pinned default before use.",
         "x-paperclip-advanced": true,
       },
       baseUrl: {

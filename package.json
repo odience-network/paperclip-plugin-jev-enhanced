@@ -28,13 +28,16 @@
   ],
   "author": "Odience",
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
   "pnpm": {
     "overrides": {
       "@paperclipai/shared": "file:.paperclip-sdk/paperclipai-shared-0.3.1.tgz"
     }
   },
   "dependencies": {
-    "@typesafe-ai/sdk": "0.6.0",
+    "@typesafe-ai/sdk": "0.7.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

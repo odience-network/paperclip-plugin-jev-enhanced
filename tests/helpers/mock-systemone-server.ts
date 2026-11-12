@@ -8,6 +8,8 @@ export interface RecordedRequest {
   path: string;
   headers: IncomingHttpHeaders;
   body: unknown;
+  /** The body as sent, for assertions on serialized key order. */
+  rawBody: string;
 }
 
 /** What the server replies with. `delayMs` holds the response back, for
@@ -80,6 +82,7 @@ export async function startMockSystemOneServer(handler: MockHandler = syntheticS
         path: req.url ?? "/",
         headers: req.headers,
         body: text ? JSON.parse(text) : undefined,
+        rawBody: text,
       };
       requests.push(recorded);
       const reply = current(recorded);

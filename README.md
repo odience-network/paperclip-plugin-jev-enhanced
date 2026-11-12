@@ -16,7 +16,7 @@ per company and can be overridden per policy, with fallback chains. See
 
 | Provider | Kind / preset | Default model | Verification |
 |---|---|---|---|
-| TypeSafe | `systemone` / `typesafe` | `jev-1.13.0` | live |
+| TypeSafe | `systemone` / `typesafe` | `jev-1.13.0` (`jev-1.14.0` allowed, shadow-only until calibrated) | live |
 | Cloudflare Workers AI (Clef, Clef Flash) | `cloudflare` (`accountId` + token) | `clef-flash` (or `clef`) | live |
 | OpenAI Decisions (GPT-6 Luna) | `openai` | `gpt-6-luna` | live |
 | Paperclip core | `core` (feature-detected, unavailable on released hosts) | host-chosen | fixtures |

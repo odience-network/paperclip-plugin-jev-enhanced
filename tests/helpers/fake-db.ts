@@ -40,6 +40,7 @@ export function createFakeDb(): LedgerDb {
           error_class: null,
           rate_version: null,
           host_invocation_id: null,
+          confidence_source: null,
           decision_group_id: decisionGroupId,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -47,7 +48,7 @@ export function createFakeDb(): LedgerDb {
         return { rowCount: 1 };
       }
       if (sql.includes("UPDATE") && sql.includes("verdict_decisions")) {
-        const [id, stateHash, answers, confidence, margin, latencyMs, usage, costUsd, outcome, reason, provider, providerKind, model, rateVersion, hostInvocationId, mode, fallbackFrom, errorClass] =
+        const [id, stateHash, answers, confidence, margin, latencyMs, usage, costUsd, outcome, reason, provider, providerKind, model, rateVersion, hostInvocationId, mode, fallbackFrom, errorClass, confidenceSource] =
           params;
         const row = decisions.find((r) => r.id === id);
         if (row) {
@@ -69,6 +70,7 @@ export function createFakeDb(): LedgerDb {
             mode: mode ?? row.mode,
             fallback_from: fallbackFrom,
             error_class: errorClass,
+            confidence_source: confidenceSource,
             updated_at: new Date().toISOString(),
           });
         }

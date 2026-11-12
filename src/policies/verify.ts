@@ -1,4 +1,5 @@
-import { choice, type Questions } from "@typesafe-ai/sdk";
+import { choice } from "@typesafe-ai/sdk";
+import type { DecisionQuestions } from "../decision/types.js";
 import type { FieldDecision, Policy, PolicyVerdict } from "./types.js";
 import { confidenceMarginFor } from "./util.js";
 
@@ -37,7 +38,7 @@ export const verifyPolicy: Policy<VerifyState> = {
     );
   },
 
-  questions(): Questions {
+  questions(): DecisionQuestions {
     return {
       relation: choice(
         'Given the "claim" and "evidence" in state, does the evidence support the claim, contradict it, or say ' +
