@@ -159,6 +159,38 @@ function knownOrigin(providerConfig: ProviderConfig): string | null {
   return providerOrigin({ ...providerConfig, baseUrl: undefined } as ProviderConfig);
 }
 
+/** True for a hostname the host's plugin fetch refuses outright: `localhost`
+ * and IP literals in the ranges `isPrivateIP` blocks (paperclip
+ * `plugin-host-services.ts`). A name that only resolves to such an address
+ * is not caught here; the host still refuses it at fetch time. */
+function isBlockedHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  // `URL` writes an IPv4-mapped address in hex (`::ffff:7f00:1`).
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+  const v4 = mapped
+    ? [Number.parseInt(mapped[1], 16) >> 8, Number.parseInt(mapped[1], 16) & 0xff]
+    : /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host)?.slice(1, 3).map(Number);
+  if (v4) {
+    const [a, b] = v4;
+    return a === 10 || a === 127 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  }
+  if (!host.includes(":")) return false;
+  return host === "::1" || host === "::" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80");
+}
+
+/** Why the host's plugin fetch will refuse this provider's base URL (its
+ * override, else the preset's default), or `null` when it may reach it.
+ * The `ollama` and `von` presets default to `http://localhost`. */
+export function blockedBaseUrlReason(providerConfig: ProviderConfig): string | null {
+  const origin = providerOrigin(providerConfig);
+  if (!origin || !isBlockedHostname(new URL(origin).hostname)) return null;
+  return (
+    `base URL ${origin} is a loopback or private address, which the host's plugin fetch refuses; ` +
+    "set baseUrl to a publicly reachable address."
+  );
+}
+
 /** Origins provider calls may reach: exactly the hosts of the configured
  * providers (plan 2.2). Anything else is refused before a request is made. */
 export function egressAllowlist(config: VerdictConfig): Set<string> {
@@ -288,6 +320,8 @@ export function validateProviderConfig(config: VerdictConfig, host: unknown): Pr
   }
 
   for (const [id, providerConfig] of Object.entries(providers)) {
+    const blocked = blockedBaseUrlReason(providerConfig);
+    if (blocked) warnings.push(`providers.${id}: ${blocked}`);
     if (providerConfig.kind === "systemone") {
       const preset = SYSTEMONE_PRESETS[providerConfig.preset];
       if (!preset) {

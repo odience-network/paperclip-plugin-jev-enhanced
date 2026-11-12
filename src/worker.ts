@@ -20,6 +20,7 @@ import { createInMemoryVerdictCache } from "./decision/cache.js";
 import { createPluginStateBudgetStore, BudgetExceededError } from "./decision/budget.js";
 import {
   allowlistedFetch,
+  blockedBaseUrlReason,
   buildPolicyPipeline,
   buildProvider,
   defaultProviderId,
@@ -585,6 +586,7 @@ type ProviderHealth = (
   | { status: "unbound" }
   | { status: "unchecked" }
   | { status: "unreachable"; message: string }
+  | { status: "misconfigured"; message: string }
 ) & { verification?: "live" | "fixtures"; caveat?: string };
 
 /** One row of the health widget's provider list. */
@@ -622,6 +624,12 @@ async function checkProviderHealth(
   }
   if (providerNeedsKey(providerConfig)) {
     return { status: "unbound" };
+  }
+  // A loopback/private base URL is a config problem, not a transport failure:
+  // the host's fetch would refuse it on every call.
+  const blocked = blockedBaseUrlReason(providerConfig);
+  if (blocked) {
+    return { status: "misconfigured", message: blocked };
   }
   const key = JSON.stringify([id, providerConfig]);
   const now = Date.now();
@@ -1134,6 +1142,9 @@ const plugin = definePlugin({
         message: "No TypeSafe API key bound yet. Create a key at console.typesafe.ai, add it to the vault, and " +
           "bind it to apiKeyRef.",
       };
+    }
+    if (health.status === "misconfigured") {
+      return { status: "degraded", message: `The default provider's ${health.message}` };
     }
     if (health.status === "unreachable") {
       return {

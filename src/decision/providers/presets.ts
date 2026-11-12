@@ -300,6 +300,9 @@ export const SYSTEMONE_PRESETS: Record<string, SystemOnePreset> = {
   },
   ollama: {
     name: "ollama",
+    // The host's plugin fetch refuses loopback and private addresses, so this
+    // localhost default only documents the server's port: set `baseUrl` to a
+    // publicly reachable address (health reports it as misconfigured until then).
     baseUrl: "http://localhost:11434",
     path: "/v1/systemone",
     modelsPath: "/api/tags",
@@ -331,6 +334,9 @@ export const SYSTEMONE_PRESETS: Record<string, SystemOnePreset> = {
   },
   von: {
     name: "von",
+    // The host's plugin fetch refuses loopback and private addresses, so this
+    // localhost default only documents the server's port: set `baseUrl` to a
+    // publicly reachable address (health reports it as misconfigured until then).
     baseUrl: "http://localhost:8000",
     path: "/v1/systemone",
     modelsPath: null,
