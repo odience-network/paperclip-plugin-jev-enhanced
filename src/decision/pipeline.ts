@@ -11,6 +11,8 @@ import { canonicalQuestionType, type DecisionQuestions, type DecisionResult } fr
 export interface DecisionPipelineOptions {
   /** `[primary, ...fallbacks]`, tried in order. At least one. */
   providers: readonly DecisionProvider[];
+  /** Asked alongside the primary for comparison only, via `askShadow`. */
+  shadows?: readonly DecisionProvider[];
   /** Total wall-clock budget for one `ask`, in milliseconds: shared by every
    * provider in the chain and all their retries (the adapters only bound each
    * individual attempt). A fallback gets whatever the providers before it left;
@@ -135,6 +137,7 @@ export function checkCapabilities(
  */
 export class DecisionPipeline {
   private readonly providers: readonly DecisionProvider[];
+  readonly shadows: readonly DecisionProvider[];
   private readonly semaphore: Semaphore;
   private readonly cache?: VerdictCache;
   private readonly budgetStore?: BudgetStore;
@@ -147,6 +150,7 @@ export class DecisionPipeline {
   constructor(options: DecisionPipelineOptions) {
     if (options.providers.length === 0) throw new Error("DecisionPipeline needs at least one provider");
     this.providers = options.providers;
+    this.shadows = options.shadows ?? [];
     this.semaphore = new Semaphore(options.maxConcurrency ?? 6);
     this.cache = options.cache;
     this.budgetStore = options.budgetStore;
@@ -174,7 +178,7 @@ export class DecisionPipeline {
     return this.primary.kind;
   }
 
-  async ask(input: VerdictAskInput): Promise<VerdictAskOutcome> {
+  private prepare(input: VerdictAskInput) {
     const started = Date.now();
     const canonicalState = canonicalize(input.state);
     const redacted = redactText(canonicalState, this.redactionPatterns);
@@ -183,10 +187,14 @@ export class DecisionPipeline {
     const canonicalQuestions = canonicalize(input.questions);
     const questionsHash = sha256Hex(canonicalQuestions);
     const requestBytes = Buffer.byteLength(truncated, "utf8") + Buffer.byteLength(canonicalQuestions, "utf8");
+    return { truncated, stateHash, questionsHash, requestBytes, started, deadline: started + this.totalBudgetMs };
+  }
+
+  async ask(input: VerdictAskInput): Promise<VerdictAskOutcome> {
+    const { requestBytes, deadline, ...prepared } = this.prepare(input);
 
     // Surface the first real provider failure; a capability skip only wins
     // when no provider in the chain could take the request at all.
-    const deadline = started + this.totalBudgetMs;
     const failures: unknown[] = [];
     let fallbackFrom: VerdictAskOutcome["fallbackFrom"] = null;
     for (const provider of this.providers) {
@@ -199,7 +207,7 @@ export class DecisionPipeline {
         continue;
       }
       try {
-        const outcome = await this.askProvider(provider, { ...input, questions }, { truncated, stateHash, questionsHash, started, deadline });
+        const outcome = await this.askProvider(provider, { ...input, questions }, { ...prepared, deadline });
         return { ...outcome, requestedProvider: this.primary, fallbackFrom };
       } catch (error) {
         failures.push(error);
@@ -209,6 +217,21 @@ export class DecisionPipeline {
       }
     }
     throw failures.find((error) => !(error instanceof CapabilityError)) ?? failures[0];
+  }
+
+  /**
+   * Asks one shadow provider, alone: no fallback chain (a fallback would
+   * mislabel who answered and add cost for nothing), same preparation,
+   * cache, daily budget and time budget as `ask`. Throws `CapabilityError`
+   * when the shadow can't take the question set.
+   */
+  async askShadow(provider: DecisionProvider, input: VerdictAskInput): Promise<VerdictAskOutcome> {
+    const { requestBytes, ...prepared } = this.prepare(input);
+    const questions = capRankedChoices(input.questions, input.choiceRanking, provider.capabilities.maxChoiceOptions);
+    const capabilityReason = checkCapabilities(provider, questions, requestBytes);
+    if (capabilityReason) throw new CapabilityError(capabilityReason, provider.id);
+    const outcome = await this.askProvider(provider, { ...input, questions }, prepared);
+    return { ...outcome, requestedProvider: provider, fallbackFrom: null };
   }
 
   async listModels(): Promise<ModelCard[]> {

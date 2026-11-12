@@ -253,6 +253,11 @@ export async function completeDecision(db: LedgerDb, id: string, patch: Complete
   );
 }
 
+/** Shadow-provider rows share their primary's `decision_group_id`; the primary
+ * row is the one whose group id is its own. "Latest decision" reads only ever
+ * see primary rows, so a shadow answer never shows as the policy's decision. */
+const PRIMARY_ROW = "(decision_group_id IS NULL OR decision_group_id = id)";
+
 /** Hard ceiling on `listDecisionHistory`'s `limit`, independent of what a
  * caller requests, so a single UI/API call can't force an unbounded scan. */
 const MAX_DECISION_HISTORY_LIMIT = 100;
@@ -265,7 +270,7 @@ const MAX_DECISION_HISTORY_LIMIT = 100;
 export async function getLatestDecision(db: LedgerDb, companyId: string, issueId: string): Promise<DecisionRow | null> {
   const rows = await db.query<DecisionDbRow>(
     `SELECT * FROM ${tableName(db, "verdict_decisions")}
-     WHERE company_id = $1 AND issue_id = $2
+     WHERE company_id = $1 AND issue_id = $2 AND ${PRIMARY_ROW}
      ORDER BY created_at DESC LIMIT 1`,
     [companyId, issueId],
   );
@@ -286,7 +291,7 @@ export async function getLatestDecisionForPolicy(
 ): Promise<DecisionRow | null> {
   const rows = await db.query<DecisionDbRow>(
     `SELECT * FROM ${tableName(db, "verdict_decisions")}
-     WHERE company_id = $1 AND issue_id = $2 AND policy = $3
+     WHERE company_id = $1 AND issue_id = $2 AND policy = $3 AND ${PRIMARY_ROW}
      ORDER BY created_at DESC LIMIT 1`,
     [companyId, issueId, policy],
   );
@@ -360,7 +365,7 @@ export async function listLatestDecisionsByPolicy(
 ): Promise<DecisionRow[]> {
   const rows = await db.query<DecisionDbRow>(
     `SELECT DISTINCT ON (policy) * FROM ${tableName(db, "verdict_decisions")}
-     WHERE company_id = $1 AND issue_id = $2
+     WHERE company_id = $1 AND issue_id = $2 AND ${PRIMARY_ROW}
      ORDER BY policy, created_at DESC`,
     [companyId, issueId],
   );
@@ -409,12 +414,13 @@ interface ModeSplitDbRow {
   count: string;
 }
 
-/** Shadow vs. suggest vs. enforce split for the T5 dashboard widget. */
+/** Shadow vs. suggest vs. enforce split for the T5 dashboard widget. Shadow-
+ * provider rows are left out: they are comparisons, not policy decisions. */
 export async function getModeSplit(db: LedgerDb, companyId: string): Promise<Record<PolicyMode, number>> {
   const rows = await db.query<ModeSplitDbRow>(
     `SELECT mode, count(*)::text AS count
      FROM ${tableName(db, "verdict_decisions")}
-     WHERE company_id = $1
+     WHERE company_id = $1 AND ${PRIMARY_ROW}
      GROUP BY mode`,
     [companyId],
   );

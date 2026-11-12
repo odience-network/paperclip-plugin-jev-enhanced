@@ -188,7 +188,7 @@ export const verdictConfigSchema = z.object({
   baseUrl: z.string().url().optional(),
   providers: z.record(providerIdSchema, providerConfigSchema).default({}),
   defaultProvider: z.string().min(1).optional(),
-  /** Resolved by the registry; called alongside the primary from G5 on. */
+  /** Asked alongside each `runPolicy` primary, recorded only (see `runShadows`). */
   shadowProviders: z.array(z.string().min(1)).default([]),
   timeoutMs: z.number().int().positive().default(10_000),
   dailyTokenBudget: z.number().int().positive().default(5_000_000),

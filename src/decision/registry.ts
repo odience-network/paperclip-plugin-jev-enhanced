@@ -182,13 +182,29 @@ export function buildPolicyProviders(config: VerdictConfig, policyName: string, 
   return usable.length > 0 ? usable : chain;
 }
 
+/** Builds the configured `shadowProviders` for one policy, minus its primary.
+ * `core` on a host without the capability is dropped. */
+export function buildShadowProviders(config: VerdictConfig, policyName: string, runtime: ProviderRuntime): DecisionProvider[] {
+  const { providers } = effectiveProviders(config);
+  return resolvePolicyProviderIds(config, policyName).shadows.flatMap((id) => {
+    const providerConfig = providers[id];
+    if (!providerConfig) return [];
+    const provider = buildProvider(id, providerConfig, runtime);
+    return provider instanceof CoreProvider && !provider.detected ? [] : [provider];
+  });
+}
+
 export function buildPolicyPipeline(
   config: VerdictConfig,
   policyName: string,
   runtime: ProviderRuntime,
-  options: Omit<DecisionPipelineOptions, "providers">,
+  options: Omit<DecisionPipelineOptions, "providers" | "shadows">,
 ): DecisionPipeline {
-  return new DecisionPipeline({ ...options, providers: buildPolicyProviders(config, policyName, runtime) });
+  return new DecisionPipeline({
+    ...options,
+    providers: buildPolicyProviders(config, policyName, runtime),
+    shadows: buildShadowProviders(config, policyName, runtime),
+  });
 }
 
 /** What `policyConfigFor` needs to resolve thresholds and mode for `provider`.

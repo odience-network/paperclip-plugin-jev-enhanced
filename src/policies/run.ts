@@ -1,4 +1,4 @@
-import { answeredByFields, type DecisionPipeline } from "../decision/pipeline.js";
+import { answeredByFields, type DecisionPipeline, type VerdictAskInput } from "../decision/pipeline.js";
 import type { VerdictAnswer } from "../decision/types.js";
 import { CapabilityError, classifyError, errorClassOf } from "../decision/errors.js";
 import { providerBinding } from "../decision/registry.js";
@@ -48,6 +48,78 @@ function outcomeForMode(mode: PolicyMode): DecisionOutcome {
 }
 
 /**
+ * Asks every shadow provider the same question set as the primary, each
+ * alone (`askShadow`: no fallback), and records each as its own `shadow`-mode
+ * row under the primary's `decision_group_id`. Rows are written before the
+ * calls, like the primary's. A shadow's verdict is computed with its own
+ * provider-bound thresholds, recorded, and never applied or suggested. Never
+ * throws: a shadow failure is an `error` row with its `error_class`, nothing
+ * more.
+ */
+async function runShadows<TState>(
+  input: RunPolicyInput<TState>,
+  deps: RunPolicyDeps,
+  ctx: PolicyContext,
+  primaryDecisionId: string,
+  askInput: VerdictAskInput,
+): Promise<void> {
+  const shadows = deps.client.shadows;
+  if (shadows.length === 0) return;
+  await Promise.all(
+    shadows.map(async (provider) => {
+      let decisionId: string | null = null;
+      try {
+        const shadowConfig = policyConfigFor(input.config, input.policy.name, providerBinding(provider));
+        decisionId = await beginDecision(deps.db, {
+          companyId: input.companyId,
+          issueId: input.issueId,
+          runId: input.runId,
+          agentId: input.agentId,
+          policy: input.policy.name,
+          policyVersion: input.policy.version,
+          questionVersion: input.policy.questionVersion,
+          model: provider.model,
+          mode: "shadow",
+          provider: provider.id,
+          providerKind: provider.kind,
+          decisionGroupId: primaryDecisionId,
+        });
+        const askOutcome = await deps.client.askShadow(provider, askInput);
+        const answers = askOutcome.result.answers as Record<string, VerdictAnswer>;
+        const verdict = input.policy.decide(answers, { ...ctx, config: shadowConfig, alwaysAuto: shadowConfig.alwaysAuto }, input.state);
+        await completeDecision(deps.db, decisionId, {
+          stateHash: ctx.stateHash ?? askOutcome.stateHash,
+          answers,
+          confidence: verdict.confidence,
+          margin: verdict.margin,
+          latencyMs: askOutcome.latencyMs,
+          usage: askOutcome.result.usage,
+          costUsd: askOutcome.costUsd,
+          outcome: "observed",
+          reason: verdict.reason,
+          ...answeredByFields(askOutcome),
+        });
+      } catch (error) {
+        if (!decisionId) return;
+        const skipped = error instanceof CapabilityError;
+        await completeDecision(deps.db, decisionId, {
+          stateHash: ctx.stateHash ?? "",
+          answers: {},
+          confidence: null,
+          margin: null,
+          latencyMs: 0,
+          usage: { input_tokens: 0, output_tokens: 0 },
+          costUsd: 0,
+          outcome: skipped ? "skipped" : "error",
+          reason: classifyError(error),
+          errorClass: skipped ? null : errorClassOf(error),
+        }).catch(() => undefined);
+      }
+    }),
+  );
+}
+
+/**
  * Orchestrates one policy evaluation end to end: resolves company config
  * (thresholds and mode bound to the policy's primary provider), writes the
  * audit row *before* the provider call, calls the provider chain, decides,
@@ -58,6 +130,10 @@ function outcomeForMode(mode: PolicyMode): DecisionOutcome {
  * fallback that isn't calibrated for this policy can only ever observe. If no
  * provider in the chain can take the question set, the row is `skipped` with
  * the capability reason code instead of `error`.
+ *
+ * Configured shadow providers are asked concurrently with the primary and
+ * recorded under its `decision_group_id` (see `runShadows`); they never change
+ * the applied action, and the call returns once they have been recorded.
  */
 export async function runPolicy<TState>(
   input: RunPolicyInput<TState>,
@@ -101,15 +177,17 @@ export async function runPolicy<TState>(
     providerKind: primary.kind,
   });
 
+  let shadowRun: Promise<void> = Promise.resolve();
   try {
-    const questions = input.policy.questions(input.state, ctx);
-    const askOutcome = await deps.client.ask({
+    const askInput: VerdictAskInput = {
       policy: input.policy.name,
       companyId: input.companyId,
       state: input.state,
-      questions,
+      questions: input.policy.questions(input.state, ctx),
       choiceRanking: input.policy.rankChoices?.(input.state, ctx),
-    });
+    };
+    shadowRun = runShadows(input, deps, ctx, decisionId, askInput);
+    const askOutcome = await deps.client.ask(askInput);
     const answeredBy = askOutcome.provider;
     const answeredConfig =
       answeredBy === primary ? policyConfig : policyConfigFor(input.config, input.policy.name, providerBinding(answeredBy));
@@ -144,8 +222,10 @@ export async function runPolicy<TState>(
       await postSuggestion({ policy: input.policy.name, verdict, ctx: answeredCtx }, deps.suggest);
     }
 
+    await shadowRun;
     return { outcome, decisionId, verdict, cached: askOutcome.cached };
   } catch (error) {
+    await shadowRun;
     const skipped = error instanceof CapabilityError;
     await completeDecision(deps.db, decisionId, {
       stateHash: "",

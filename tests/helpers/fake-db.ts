@@ -3,7 +3,8 @@ import type { LedgerDb } from "../../src/ledger/db.js";
 /** A minimal in-memory `LedgerDb` that actually stores rows, since the real
  * SDK test harness always returns `[]` from `query()` and can't be seeded. */
 export function createFakeDb(): LedgerDb {
-  const decisions: Record<string, unknown>[] = [];
+  const allDecisions: Record<string, unknown>[] = [];
+  const decisions = allDecisions;
   const feedback: Record<string, unknown>[] = [];
 
   return {
@@ -92,6 +93,11 @@ export function createFakeDb(): LedgerDb {
       throw new Error(`Unhandled SQL in fake db: ${sql}`);
     },
     async query<T>(sql: string, params: unknown[] = []): Promise<T[]> {
+      // Mirrors the ledger's `PRIMARY_ROW` filter: shadow-provider rows carry
+      // their primary's group id, not their own.
+      const decisions = sql.includes("decision_group_id = id")
+        ? allDecisions.filter((r) => r.decision_group_id == null || r.decision_group_id === r.id)
+        : allDecisions;
       if (sql.includes("company_id = $1 AND issue_id = $2") && sql.includes("ORDER BY created_at DESC LIMIT 1")) {
         const [companyId, issueId] = params;
         return decisions.filter((r) => r.company_id === companyId && r.issue_id === issueId).slice(0, 1) as T[];
