@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PolicyMode } from "../config.js";
+import type { ConfidenceSource } from "../decision/confidence.js";
 import type { ErrorClass } from "../decision/errors.js";
 import type { ProviderKind } from "../decision/provider.js";
 import { type LedgerDb, tableName } from "./db.js";
@@ -54,6 +55,9 @@ export interface CompleteDecisionInput {
   model?: string;
   rateVersion?: string | null;
   hostInvocationId?: string | null;
+  /** Whether choice/score confidences came from the provider or were derived
+   * from its probabilities; `null` when no answer carries one. */
+  confidenceSource?: ConfidenceSource | null;
   /** Set when the answering provider's binding forced a different mode than
    * the one recorded at `beginDecision` time. */
   mode?: PolicyMode;
@@ -92,6 +96,7 @@ export interface DecisionRow {
   errorClass: ErrorClass | null;
   rateVersion: string | null;
   hostInvocationId: string | null;
+  confidenceSource: ConfidenceSource | null;
   decisionGroupId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -125,6 +130,7 @@ interface DecisionDbRow {
   error_class?: ErrorClass | null;
   rate_version?: string | null;
   host_invocation_id?: string | null;
+  confidence_source?: ConfidenceSource | null;
   decision_group_id?: string | null;
   created_at: string;
   updated_at: string;
@@ -159,6 +165,7 @@ function fromDbRow(row: DecisionDbRow): DecisionRow {
     errorClass: row.error_class ?? null,
     rateVersion: row.rate_version ?? null,
     hostInvocationId: row.host_invocation_id ?? null,
+    confidenceSource: row.confidence_source ?? null,
     decisionGroupId: row.decision_group_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -219,6 +226,7 @@ export async function completeDecision(db: LedgerDb, id: string, patch: Complete
          mode = coalesce($16, mode),
          fallback_from = $17,
          error_class = $18,
+         confidence_source = $19,
          updated_at = now()
      WHERE id = $1`,
     [
@@ -240,6 +248,7 @@ export async function completeDecision(db: LedgerDb, id: string, patch: Complete
       patch.mode ?? null,
       patch.fallbackFrom ?? null,
       patch.errorClass ?? null,
+      patch.confidenceSource ?? null,
     ],
   );
 }

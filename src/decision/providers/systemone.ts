@@ -1,8 +1,9 @@
 import { TypeSafeClient, type Fetch, type RetryPolicy } from "@typesafe-ai/sdk";
+import { withDerivedConfidence } from "../confidence.js";
 import { classifyError, VerdictValidationError } from "../errors.js";
-import type { DecisionProvider, DecisionRequest, ModelCard, ProviderAvailability } from "../provider.js";
+import type { DecisionProvider, DecisionRequest, ModelCard, ProviderAvailability, ProviderDecision } from "../provider.js";
 import { estimateCostFromCard, RATE_CARDS } from "../rates.js";
-import { verdictAskResultSchema, toSystemOneQuestions, type DecisionResult, type DecisionUsage } from "../types.js";
+import { verdictAskResultSchema, toSystemOneQuestions, type DecisionUsage } from "../types.js";
 import type { SystemOneAuthStyle, SystemOnePreset } from "./presets.js";
 
 const SDK_SYSTEMONE_PATH = "/v1/systemone";
@@ -75,21 +76,22 @@ export class SystemOneProvider implements DecisionProvider {
     }
   }
 
-  async decide(req: DecisionRequest, opts: { signal: AbortSignal }): Promise<DecisionResult> {
+  async decide(req: DecisionRequest, opts: { signal: AbortSignal }): Promise<ProviderDecision> {
     const client = await this.buildSdkClient();
     const raw = await client.systemOne(
       { state: req.state, questions: toSystemOneQuestions(req.questions), model: req.model },
       { timeout: this.timeoutMs, signal: opts.signal },
     );
 
-    const parsed = verdictAskResultSchema.safeParse(JSON.parse(JSON.stringify(raw)));
+    const { raw: filled, confidenceSource } = withDerivedConfidence(JSON.parse(JSON.stringify(raw)));
+    const parsed = verdictAskResultSchema.safeParse(filled);
     if (!parsed.success) {
       throw new VerdictValidationError(`Provider response failed validation: ${parsed.error.message}`, parsed.error);
     }
     if (parsed.data.model !== req.model) {
       throw new VerdictValidationError(`Provider model echo mismatch: requested "${req.model}", got "${parsed.data.model}"`);
     }
-    return parsed.data;
+    return { ...parsed.data, confidenceSource };
   }
 
   async listModels(): Promise<ModelCard[]> {

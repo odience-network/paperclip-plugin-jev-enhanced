@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { IncomingHttpHeaders } from "node:http";
 import { parseVerdictConfig } from "../src/config.js";
-import { DecisionPipeline } from "../src/decision/pipeline.js";
+import { answeredByFields, DecisionPipeline } from "../src/decision/pipeline.js";
 import type { DecisionProvider } from "../src/decision/provider.js";
+import { createInMemoryVerdictCache } from "../src/decision/cache.js";
 import { buildProvider, type ProviderRuntime } from "../src/decision/registry.js";
 import { classifyError, CapabilityError } from "../src/decision/errors.js";
 import { CoreProvider, CORE_UNAVAILABLE_REASON, type HostDecisionCapability } from "../src/decision/providers/core.js";
@@ -231,6 +232,33 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
 
     server.respondWith(() => ({ body: { model: "someone-else", answers: { q: { type: "noul", noul: 0.5 } }, usage: { input_tokens: 1, output_tokens: 1 } } }));
     expect(classifyError(await ask().catch((e) => e))).toBe("validation-failed");
+  });
+
+  it("derives a missing choice/score confidence with the canonical formulas and records the source", async () => {
+    const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.baseUrl)] });
+    const native = await pipeline.ask({ policy: "contract", companyId: "c1", state: "native", questions: MIXED_QUESTIONS });
+    expect(native.confidenceSource).toBe("native");
+    expect(native.result.answers.pick).toMatchObject({ confidence: 0.9 });
+
+    server.respondWith((request) => {
+      const reply = syntheticSystemOneReply(request);
+      const body = reply.body as { answers: Record<string, Record<string, unknown>> };
+      for (const answer of Object.values(body.answers)) delete answer.confidence;
+      return reply;
+    });
+    const derived = await pipeline.ask({ policy: "contract", companyId: "c1", state: "derived", questions: MIXED_QUESTIONS });
+    // pick: 0.9 of two options. rate: 0.9 on level 0, 0.05 on each of 1 and
+    // 2, so the spread from level 0 is 0.15 against MAD_unif 2/3.
+    expect(derived.result.answers.pick).toMatchObject({ confidence: expect.closeTo(0.8, 12) });
+    expect(derived.result.answers.rate).toMatchObject({ confidence: expect.closeTo(1 - 0.15 / (2 / 3), 12) });
+    expect(derived.confidenceSource).toBe("derived");
+    expect(answeredByFields(derived).confidenceSource).toBe("derived");
+
+    // A cache hit keeps the source of the answer it replays.
+    const cachedPipeline = new DecisionPipeline({ providers: [providerFor(contract, server.baseUrl)], cache: createInMemoryVerdictCache() });
+    await cachedPipeline.ask({ policy: "contract", companyId: "c1", state: "derived", questions: MIXED_QUESTIONS });
+    const hit = await cachedPipeline.ask({ policy: "contract", companyId: "c1", state: "derived", questions: MIXED_QUESTIONS });
+    expect(hit).toMatchObject({ cached: true, confidenceSource: "derived" });
   });
 
   it("maps a slow server to timeout", async () => {

@@ -1,3 +1,4 @@
+import type { ConfidenceSource } from "./confidence.js";
 import type { DecisionQuestionType, DecisionQuestions, DecisionResult, DecisionUsage } from "./types.js";
 
 export type ProviderKind = "systemone" | "cloudflare" | "openai" | "core";
@@ -44,8 +45,9 @@ export interface CostEstimate {
 }
 
 /** `hostInvocationId` is set by host-billed providers so the ledger row can
- * join to the host's own cost record. Never cached. */
-export type ProviderDecision = DecisionResult & { hostInvocationId?: string };
+ * join to the host's own cost record. Never cached. `confidenceSource` is set
+ * by adapters that run `withDerivedConfidence`; absent means native. */
+export type ProviderDecision = DecisionResult & { hostInvocationId?: string; confidenceSource?: ConfidenceSource | null };
 
 export interface DecisionProvider {
   /** Config alias, e.g. `"typesafe"`, `"cf-clef"`, `"core"`. */

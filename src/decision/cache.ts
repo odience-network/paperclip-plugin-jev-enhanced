@@ -1,7 +1,9 @@
+import type { ConfidenceSource } from "./confidence.js";
 import type { VerdictAskResult } from "./types.js";
 
 export interface VerdictCacheEntry {
   result: VerdictAskResult;
+  confidenceSource?: ConfidenceSource | null;
   cachedAt: number;
 }
 
