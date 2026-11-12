@@ -1,7 +1,7 @@
-# JevGuard harness hooks
+# VerdictGuard harness hooks
 
 Claude Code `PreToolUse`/`PostToolUse`/`Stop` hooks that call this plugin's
-`POST /plugins/odience.jev/api/guard/evaluate` route before/after each tool
+`POST /plugins/odience.verdict/api/guard/evaluate` route before/after each tool
 call and before the agent stops. No plugin SDK dependency — plain Node
 (`>=18`, for built-in `fetch`) so they run inside the coding agent's own
 sandbox without an install step.
@@ -25,7 +25,7 @@ releases — treat a mismatch as a harness bug to fix, not a plugin bug.
 | `PAPERCLIP_ISSUE_ID` | no | Current issue id, if any (enables the `on_task` check and override-stamp verification) |
 | `PAPERCLIP_GUARD_TIMEOUT_MS` | no | Client-side timeout per call (default `2000`, above the server's own 1500ms budget) |
 | `PAPERCLIP_GUARD_FAIL_CLOSED` | no | `1` to fail `deny`/`block` instead of `allow` when the harness itself can't reach the plugin (default: fail-open — see docs/SECURITY.md) |
-| `PAPERCLIP_GUARD_DISABLED` | no | `1` to bypass JevGuard entirely for this invocation (local escape hatch, not the plugin's company-wide kill switch) |
+| `PAPERCLIP_GUARD_DISABLED` | no | `1` to bypass VerdictGuard entirely for this invocation (local escape hatch, not the plugin's company-wide kill switch) |
 
 Paperclip's own agent-run environment sets `PAPERCLIP_RUN_ID` and
 `PAPERCLIP_COMPANY_ID` automatically; `PAPERCLIP_AGENT_API_KEY` must be

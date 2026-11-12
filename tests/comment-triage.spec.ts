@@ -5,8 +5,8 @@ import type { DecisionPipeline } from "../src/decision/pipeline.js";
 import { commentTriagePolicy, type CommentTriageState } from "../src/policies/comment-triage.js";
 import { runPolicy } from "../src/policies/run.js";
 import type { PolicyContext } from "../src/policies/types.js";
-import type { JevAnswer } from "../src/decision/types.js";
-import { jevConfigSchema, type JevConfig } from "../src/config.js";
+import type { VerdictAnswer } from "../src/decision/types.js";
+import { verdictConfigSchema, type VerdictConfig } from "../src/config.js";
 import type { LedgerDb } from "../src/ledger/db.js";
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
@@ -20,7 +20,7 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 function createFakeDb(): LedgerDb {
   const rows = new Map<string, Record<string, unknown>>();
   return {
-    namespace: "plugin_jev_test",
+    namespace: "plugin_verdict_test",
     async execute(sql, params = []) {
       if (sql.includes("INSERT INTO")) {
         const [id] = params;
@@ -41,8 +41,8 @@ function createFakeDb(): LedgerDb {
   };
 }
 
-function baseConfig(overrides: Partial<JevConfig> = {}): JevConfig {
-  return jevConfigSchema.parse({ ...overrides });
+function baseConfig(overrides: Partial<VerdictConfig> = {}): VerdictConfig {
+  return verdictConfigSchema.parse({ ...overrides });
 }
 
 function baseState(overrides: Partial<CommentTriageState> = {}): CommentTriageState {
@@ -70,11 +70,11 @@ function baseCtx(overrides: Partial<PolicyContext> = {}): PolicyContext {
   };
 }
 
-function noulAnswer(p: number): JevAnswer {
+function noulAnswer(p: number): VerdictAnswer {
   return { type: "noul", noul: p };
 }
 
-function scoreAnswer(index: number, confidence = 0.9): JevAnswer {
+function scoreAnswer(index: number, confidence = 0.9): VerdictAnswer {
   const legend = { "0": "low", "1": "medium", "2": "high", "3": "critical" };
   const keys = Object.keys(legend);
   const rest = 1 - confidence;
@@ -156,7 +156,7 @@ describe("commentTriagePolicy.questions", () => {
 describe("commentTriagePolicy.decide", () => {
   const thresholdCtx = baseCtx({ config: { enabled: true, mode: "shadow", thresholds: { confidenceMin: 0.7, marginMin: 0.15 }, alwaysAuto: false, options: {} } });
 
-  function answers(overrides: Partial<Record<string, JevAnswer>> = {}): Record<string, JevAnswer> {
+  function answers(overrides: Partial<Record<string, VerdictAnswer>> = {}): Record<string, VerdictAnswer> {
     return {
       is_question_for_human: noulAnswer(0.1),
       contains_decision_or_approval: noulAnswer(0.1),
@@ -235,7 +235,7 @@ describe("commentTriagePolicy.decide", () => {
 });
 
 describe("commentTriagePolicy via runPolicy", () => {
-  function configFor(mode: "shadow" | "suggest" | "enforce"): JevConfig {
+  function configFor(mode: "shadow" | "suggest" | "enforce"): VerdictConfig {
     return baseConfig({
       policies: {
         "comment-triage": { enabled: true, mode, thresholds: { confidenceMin: 0.7, marginMin: 0.15 }, alwaysAuto: false, options: {} },
@@ -298,8 +298,8 @@ describe("commentTriagePolicy via runPolicy", () => {
       expect.objectContaining({
         issueId: "issue_1",
         companyId: "company_1",
-        reason: "jev.comment-triage.blocker",
-        idempotencyKey: "jev:comment-triage:comment_1",
+        reason: "verdict.comment-triage.blocker",
+        idempotencyKey: "verdict:comment-triage:comment_1",
       }),
     );
   });

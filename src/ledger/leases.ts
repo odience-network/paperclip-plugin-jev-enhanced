@@ -5,7 +5,7 @@ export interface LeaseState {
   set(input: { scopeKind: "instance"; namespace: string; stateKey: string }, value: unknown): Promise<void>;
 }
 
-const LEASE_NAMESPACE = "jev-lease";
+const LEASE_NAMESPACE = "verdict-lease";
 const DEFAULT_LEASE_TTL_MS = 5 * 60_000;
 
 interface LeaseRecord {

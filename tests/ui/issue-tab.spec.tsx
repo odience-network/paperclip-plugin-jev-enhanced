@@ -27,8 +27,8 @@ describe("IssueDecisionsTab", () => {
           }}
         />,
       );
-      expect(screen.getByText(/Loading Jev decisions/i)).toBeTruthy();
-      await waitFor(() => expect(screen.queryByText(/Loading Jev decisions/i)).toBeNull());
+      expect(screen.getByText(/Loading Verdict decisions/i)).toBeTruthy();
+      await waitFor(() => expect(screen.queryByText(/Loading Verdict decisions/i)).toBeNull());
       void harness;
     } finally {
       uninstall();
@@ -51,7 +51,7 @@ describe("IssueDecisionsTab", () => {
           }}
         />,
       );
-      await waitFor(() => expect(screen.getByText(/No Jev decisions recorded for this issue yet/i)).toBeTruthy());
+      await waitFor(() => expect(screen.getByText(/No Verdict decisions recorded for this issue yet/i)).toBeTruthy());
     } finally {
       uninstall();
     }

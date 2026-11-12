@@ -1,4 +1,4 @@
-import { JevValidationError, ProviderUnavailableError } from "../errors.js";
+import { VerdictValidationError, ProviderUnavailableError } from "../errors.js";
 import type {
   DecisionProvider,
   DecisionRequest,
@@ -6,7 +6,7 @@ import type {
   ProviderCapabilities,
   ProviderDecision,
 } from "../provider.js";
-import { jevAskResultSchema, toSystemOneQuestions } from "../types.js";
+import { verdictAskResultSchema, toSystemOneQuestions } from "../types.js";
 
 export const CORE_UNAVAILABLE_REASON = "unavailable on this host";
 
@@ -86,13 +86,13 @@ export class CoreProvider implements DecisionProvider {
       },
       { signal: opts.signal },
     );
-    const parsed = jevAskResultSchema.safeParse({
+    const parsed = verdictAskResultSchema.safeParse({
       model: raw.model,
       answers: raw.answers,
       usage: raw.usage ?? { input_tokens: 0, output_tokens: 0 },
     });
     if (!parsed.success) {
-      throw new JevValidationError(`Core decision response failed validation: ${parsed.error.message}`, parsed.error);
+      throw new VerdictValidationError(`Core decision response failed validation: ${parsed.error.message}`, parsed.error);
     }
     return typeof raw.invocationId === "string" ? { ...parsed.data, hostInvocationId: raw.invocationId } : parsed.data;
   }

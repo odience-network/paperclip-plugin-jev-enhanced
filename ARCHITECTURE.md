@@ -1,8 +1,12 @@
-# Odience Jev — Architecture
+# Verdict — Architecture
 
-Plugin id: `odience.jev`. Integrates TypeSafe's Jev decision model into
-Paperclip agentic workflows: observes issue state, asks policy questions, and
-records shadow/suggest/enforce decisions to a company-scoped ledger.
+Plugin id: `odience.verdict`, package `@odience/paperclip-plugin-verdict`.
+Decision models for Paperclip: TypeSafe Jev, Cloudflare Clef, OpenAI
+Decisions, self-hosted. Verdict observes issue state, asks policy questions
+through a configurable chain of decision providers, and records
+shadow/suggest/enforce decisions to a company-scoped ledger. Database
+namespace slug `verdict` (schema `plugin_verdict_acf66b4489`, derived by the
+host from the plugin id), tables `verdict_decisions` and `verdict_feedback`.
 
 ## Module map
 
@@ -14,7 +18,7 @@ src/
                       data/action handlers, jobs, tools, api routes, health,
                       and config validation together.
   config.ts           Zod schema + parser for company-scoped config
-                      (JevConfig). SDK-independent and unit-testable on its
+                      (VerdictConfig). SDK-independent and unit-testable on its
                       own; `worker.ts` is the only module that narrows
                       `apiKeyRef` to the SDK's `EnvSecretRefBinding` type.
   decision/
@@ -55,10 +59,10 @@ src/
                       stateHash, questionsHash).
     budget.ts          Daily token/cost budget store, backed by `ctx.state`.
                       Applied only to `billing: "plugin"` providers.
-    models.ts          `DEFAULT_JEV_MODEL`.
+    models.ts          `DEFAULT_TYPESAFE_MODEL`.
     semaphore.ts        Bounded concurrency primitive (default: 6).
     types.ts           Zod schemas for the request/response wire shape (PR
-                      #13713) plus `JevAnswer`. Canonical question types
+                      #13713) plus `VerdictAnswer`. Canonical question types
                       are `boolean`/`choice`/`score`; `noul` is accepted as
                       an alias and is what goes on the SystemOne wire.
                       Answers keep the SystemOne shape (`{type: "noul",
@@ -71,9 +75,9 @@ src/
   ledger/
     db.ts              `LedgerDb` interface — matches `ctx.db` exactly so the
                       SDK's database client can be passed through unchanged.
-    decisions.ts        `jev_decisions` reads/writes: begin-before-call,
+    decisions.ts        `verdict_decisions` reads/writes: begin-before-call,
                       complete-after-call, history, latest, aggregates.
-    feedback.ts         `jev_feedback` writes (human/agent review of a
+    feedback.ts         `verdict_feedback` writes (human/agent review of a
                       decision).
     leases.ts           Idempotency leases in `ctx.state`, keyed by event id,
                       with TTL.
@@ -84,21 +88,21 @@ src/
                       candidate-set size (see `issue-triage`'s `maxCandidates`).
     ping.ts             Reference policy: trivial question/threshold/verdict
                       example used by tests, the eval skeleton, and the
-                      `jev-ping` tool.
+                      `verdict-ping` tool.
     issue-triage.ts     `issue-triage` policy: routes a new/updated issue to
                       an owner, priority, issue type, etc. See "Policies >
                       issue-triage" below for the full field mapping.
-    ask.ts              `ask` policy backing the `jev-ask` tool/route: runs a
+    ask.ts              `ask` policy backing the `verdict-ask` tool/route: runs a
                       caller-supplied state/questions pair through the
                       standard pipeline without interpreting the answers —
                       every field is `observe`. See "Policies > ask" below.
-    classify-task.ts    `classify-task` policy backing `jev-classify-task`:
+    classify-task.ts    `classify-task` policy backing `verdict-classify-task`:
                       work kind / model tier / review depth plus a per-skill
                       load recommendation. See "Policies > classify-task".
-    verify.ts           `verify` policy backing `jev-verify`: claim vs.
+    verify.ts           `verify` policy backing `verdict-verify`: claim vs.
                       evidence → `supports`/`contradicts`/`says_nothing`. See
                       "Policies > verify" below.
-    rerank.ts           `rerank` policy backing `jev-rerank`: per-candidate
+    rerank.ts           `rerank` policy backing `verdict-rerank`: per-candidate
                       relevance/contains-answer/injection noul questions. See
                       "Policies > rerank" below.
     comment-triage.ts   `comment-triage` policy: classifies a new issue
@@ -120,8 +124,8 @@ src/
                       `decision/types.ts`; the single source of request validation
                       for both the MCP tools and the `/tools/*` routes.
     runTool.ts           `runDecisionTool()`: the shared MCP-tool/API-route
-                      dispatch used by `jev-ask`/`jev-classify-task`/
-                      `jev-verify`/`jev-rerank` — validates params against
+                      dispatch used by `verdict-ask`/`verdict-classify-task`/
+                      `verdict-verify`/`verdict-rerank` — validates params against
                       the caller's zod schema (`schemas.ts`), calls
                       `runPolicy()`, and maps any failure to a short machine
                       code via `decision/errors.ts`'s `classifyError`, so a tool
@@ -188,29 +192,29 @@ eval/
                       eval/report-comment-triage.ts` / `tsx
                       eval/report-run-outcome-qa.ts`.
 migrations/
-  001_jev_tables.sql    `jev_decisions` / `jev_feedback` DDL.
+  001_verdict_tables.sql    `verdict_decisions` / `verdict_feedback` DDL.
 ```
 
 ## Data model
 
-Two tables in the plugin's own database namespace (`jev`, see
+Two tables in the plugin's own database namespace (`verdict`, see
 `manifest.ts`'s `database.namespaceSlug`), created by
-`migrations/001_jev_tables.sql`:
+`migrations/001_verdict_tables.sql`:
 
-- **`jev_decisions`** — one row per policy evaluation: `company_id`,
+- **`verdict_decisions`** — one row per policy evaluation: `company_id`,
   `issue_id`, `run_id`, `agent_id`, `policy`/`policy_version`/
   `question_version`, `model`, `state_hash` (SHA-256 of the canonicalized,
   redacted, truncated state — never the state itself), `answers` (structured
   JSON from the model, not free text), `confidence`, `margin`, `latency_ms`,
   `usage`, `cost_usd`, `mode`, `outcome`
   (`observed|suggested|applied|skipped|blocked|error`), `reason` (a short
-  machine code, not free text). `migrations/003_jev_decision_providers.sql`
+  machine code, not free text). `migrations/003_verdict_decision_providers.sql`
   adds `provider` (config alias of the provider that answered),
   `provider_kind`, `rate_version` and `host_invocation_id` (both null for a
   host-billed provider, whose `cost_usd` is also null), and
   `decision_group_id` (joins a primary decision with its shadow-provider
   decisions; set to the row's own id until shadow calls land in G5).
-- **`jev_feedback`** — human/agent review of a decision: `decision_id`,
+- **`verdict_feedback`** — human/agent review of a decision: `decision_id`,
   `user_id`/`agent_id`, `verdict` (`accept|override`), `note` (an
   operator-authored review note — not raw issue text).
 
@@ -266,8 +270,8 @@ Then, for each provider in the policy's `[primary, ...fallbacks]` chain:
    (`AbortSignal.timeout`). For `systemone`, that is `@typesafe-ai/sdk`'s
    `TypeSafeClient.systemOne()` with the SDK's own retry/backoff (honoring
    `Retry-After`) and per-attempt timeout, the preset's path and auth
-   header, and strict validation against `jevAskResultSchema` (a model-echo
-   mismatch or malformed answer throws `JevValidationError`). Any failure
+   header, and strict validation against `verdictAskResultSchema` (a model-echo
+   mismatch or malformed answer throws `VerdictValidationError`). Any failure
    moves on to the next provider; the first real failure is rethrown if all
    fail.
 10. **Budget + cost accounting**: usage is added to the daily budget store;
@@ -276,7 +280,7 @@ Then, for each provider in the policy's `[primary, ...fallbacks]` chain:
 11. **Cache write** on success.
 
 The outcome names the provider that answered. `runPolicy`, `guard/evaluate`
-and `jev:decide-browser-action` record it in the ledger and, if a fallback
+and `verdict:decide-browser-action` record it in the ledger and, if a fallback
 answered, re-resolve thresholds and mode for it.
 
 Provider keys are obtained only through the registry's `resolveSecret`,
@@ -309,7 +313,7 @@ stays observe-only on another until it is calibrated there (G5).
 
 ## Config
 
-Company-scoped, validated by `src/config.ts` (`parseJevConfig`):
+Company-scoped, validated by `src/config.ts` (`parseVerdictConfig`):
 
 | Field | Default | Notes |
 |---|---|---|
@@ -324,10 +328,10 @@ Company-scoped, validated by `src/config.ts` (`parseJevConfig`):
 | `policies.<name>` | `{enabled: true, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {}}` | Per-policy |
 | `policies.<name>.provider` / `.fallbackProviders` | `defaultProvider` / `[]` | Primary provider and ordered fallback chain for this policy |
 | `policies.<name>.thresholds` | `{}` | Numbers, plus optional `"<provider>/<model>": {...}` override blocks |
-| `policies.<name>.alwaysAuto` | `false` | Lets this policy apply fields over a human-set value. Never applies to `assigneeUserId`, which Jev can never set regardless of this flag. |
+| `policies.<name>.alwaysAuto` | `false` | Lets this policy apply fields over a human-set value. Never applies to `assigneeUserId`, which Verdict can never set regardless of this flag. |
 | `policies.<name>.options` | `{}` | Policy-specific bag, e.g. `issue-triage`'s `issueTypeLabelIds`/`maxBacklogSweepPerRun` (see "Policies > issue-triage" below) |
 | `redactionPatterns` | `[]` | Regexes replaced with `[REDACTED]` before sending |
-| `respectExistingFields` | `true` | Jev never overwrites a human-set field unless this is explicitly disabled |
+| `respectExistingFields` | `true` | Verdict never overwrites a human-set field unless this is explicitly disabled |
 
 Disclosure that state text is sent to TypeSafe (`api.typesafe.ai`) is
 surfaced via the schema's top-level JSON Schema `description` (plugin
@@ -368,11 +372,11 @@ ledger row, and then — depending on the resolved mode — either calls
 calls neither; ledger write is the only effect.
 
 `ping` (`src/policies/ping.ts`) is the trivial reference implementation used
-by tests, the eval fixtures, and the `jev-ping` tool
-(`ctx.tools.register("jev-ping", ...)` in `worker.ts`) for manually
+by tests, the eval fixtures, and the `verdict-ping` tool
+(`ctx.tools.register("verdict-ping", ...)` in `worker.ts`) for manually
 exercising the full pipeline end to end.
 
-`respectExistingFields` and the hard rule that Jev never overrides a
+`respectExistingFields` and the hard rule that Verdict never overrides a
 human-set `assigneeUserId` (even under `alwaysAuto`) are policy-author
 responsibilities enforced by convention and code review in `apply/`/`decide()`
 implementations, not by a generic framework guard — each `apply` handler and
@@ -424,7 +428,7 @@ Mode semantics for `owner`/`priority`/`issueType` once the gate clears:
   `ctx.issues.update`.
 - **enforce**: patches the field via `ctx.issues.update`
   (`src/apply/index.ts`) — but only if the field isn't already human-set, or
-  `alwaysAuto` is on for this policy. `assigneeUserId` is never a key Jev can
+  `alwaysAuto` is on for this policy. `assigneeUserId` is never a key Verdict can
   write, in any mode, regardless of `alwaysAuto`.
 
 See `eval/reports/issue-triage.md` for the current accuracy/agreement/ECE/
@@ -433,8 +437,8 @@ synthetic dataset — see that report's "Scope note").
 
 ### Policies > `ask`, `classify-task`, `verify`, `rerank`
 
-These four policies back the `jev-ask`/`jev-classify-task`/`jev-verify`/
-`jev-rerank` tools and their `tool-*` API routes (see `README.md`'s "Tools"
+These four policies back the `verdict-ask`/`verdict-classify-task`/`verdict-verify`/
+`verdict-rerank` tools and their `tool-*` API routes (see `README.md`'s "Tools"
 section for request/response examples). All four are dispatched through the
 shared `runDecisionTool()` (`src/tools/runTool.ts`), default to `shadow`
 mode, and — unlike `issue-triage` — every field they ever decide is
@@ -444,8 +448,8 @@ effect.
 
 #### `ask` (`src/policies/ask.ts`)
 
-Backs the generic `jev-ask` tool. The caller supplies both `state` and
-`questions` directly (validated against the shared `jevQuestionSchema` in
+Backs the generic `verdict-ask` tool. The caller supplies both `state` and
+`questions` directly (validated against the shared `verdictQuestionSchema` in
 `src/tools/schemas.ts` before this policy ever runs); `decide()` just
 echoes each answer back as an observe-only field (`noul >= 0.5` → boolean,
 `choice`/`score` passed through as-is) and reports the minimum
@@ -455,7 +459,7 @@ confidence/margin across all answers. `preFilter` rejects an empty
 
 #### `classify-task` (`src/policies/classify-task.ts`)
 
-Backs `jev-classify-task`. Three independent choice questions plus one noul
+Backs `verdict-classify-task`. Three independent choice questions plus one noul
 per candidate skill:
 
 | Question | Type | Catalog |
@@ -471,7 +475,7 @@ or `"no-answer"` if `workKind` is missing or the wrong answer type.
 
 #### `verify` (`src/policies/verify.ts`)
 
-Backs `jev-verify`. One choice question — "does `evidence` support,
+Backs `verdict-verify`. One choice question — "does `evidence` support,
 contradict, or say nothing about `claim`" — over
 `VERIFY_RELATION_CATALOG = ["supports", "contradicts", "says_nothing"]`.
 `preFilter` rejects a blank `claim` or `evidence`. The verdict *is* the
@@ -483,7 +487,7 @@ an actual passed test/check, not the claim restated in different words.
 
 #### `rerank` (`src/policies/rerank.ts`)
 
-Backs `jev-rerank`. Three noul questions per candidate —
+Backs `verdict-rerank`. Three noul questions per candidate —
 `relevant:<id>`, `containsAnswer:<id>`, `injection:<id>` — scored
 independently. `preFilter` rejects an empty `query` or an empty
 `candidates` list. Verdict is `"ranked"` once at least one candidate has at
@@ -647,7 +651,7 @@ entry (`src/manifest.ts`):
   one exception: `PluginConfigClient` (the worker-side SDK type) only
   exposes `get()`, with no write path, so a worker action can't save config
   on this SDK version. Until the SDK adds a config write method, this form
-  calls the host's own `/api/plugins/odience.jev/config` route directly
+  calls the host's own `/api/plugins/odience.verdict/config` route directly
   (`GET` to load, `POST` to save) with `credentials: "include"`, and
   `POST .../config/test` to invoke `onValidateConfig` for Test Connection
   without persisting. Remove this workaround and switch to a bridge action
@@ -679,9 +683,9 @@ must run the install from a terminal with their own Paperclip credentials,
 against the live checkout:
 
 ```sh
-cd /media/user/user-workspace/projects/paperclip
-pnpm --filter @odience/paperclip-plugin-jev build   # if building in-tree
-npx paperclipai plugin install /media/user/user-workspace/projects/paperclip-plugin-jev-enhanced
+cd <path-to-paperclip-checkout>
+pnpm --filter @odience/paperclip-plugin-verdict build   # if building in-tree
+npx paperclipai plugin install <path-to-paperclip-plugin-verdict-checkout>
 ```
 
 (`plugin install <path>` auto-detects a local filesystem path; `--no-verify-target`
@@ -689,9 +693,11 @@ can skip the pre-install target probe, but leaving it on is recommended so the
 installing user can confirm which Paperclip instance/version they're
 targeting before the plugin lands there.)
 
-After install, bind the TypeSafe API key: create a key at
-console.typesafe.ai, add it to the vault, and bind it to `apiKeyRef` on
-`plugin:odience.jev`'s config for each company that should use Jev. Until
+After install, bind a provider key: for TypeSafe, create a key at
+console.typesafe.ai, add it to the vault as `verdict_typesafe_api_key`, and
+bind it to `providers.typesafe.apiKeyRef` on `plugin:odience.verdict`'s config
+for each company that should use Verdict (an existing `jev_api_token` bound to
+the deprecated top-level `apiKeyRef` keeps working for this release). Until
 that binding exists, `onHealth`/`onValidateConfig` report `degraded`/a
 warning rather than blocking install or configuration.
 
@@ -700,49 +706,49 @@ warning rather than blocking install or configuration.
 Disabling or uninstalling the plugin stops all `issue.created` processing and
 job scheduling immediately; no in-flight provider calls persist past the
 plugin process lifetime (nothing is queued outside `ctx.jobs`/`ctx.state`,
-both of which are torn down with the plugin). The `jev_decisions`/
-`jev_feedback` tables and their namespace are untouched by a disable, so
+both of which are torn down with the plugin). The `verdict_decisions`/
+`verdict_feedback` tables and their namespace are untouched by a disable, so
 historical data survives a disable/re-enable cycle; a full uninstall drops
 the namespace per the host's normal plugin-uninstall data-retention policy.
 
 ## Security posture
 
 - The TypeSafe API key is only ever read via `ctx.secrets.resolve`, bound to
-  `plugin:odience.jev`. It is never read from `process.env`, never logged,
+  `plugin:odience.verdict`. It is never read from `process.env`, never logged,
   and never persisted outside the host's own vault.
-- No raw issue state or free text is ever written to `jev_decisions` or
-  `jev_feedback` — only hashes, structured answers, scores, and usage
+- No raw issue state or free text is ever written to `verdict_decisions` or
+  `verdict_feedback` — only hashes, structured answers, scores, and usage
   metadata (enforced by `tests/ledger.spec.ts`).
 - `redactionPatterns` strip sensitive substrings from state text before it
   leaves the plugin, ahead of canonicalization's hash and the provider call.
 - Every policy defaults to `shadow` mode; `apply/` (the only place with side
   effects) is unreachable except in `enforce` mode.
-- `ask`/`classify-task`/`verify`/`rerank` (the `jev-*` decision tools and
+- `ask`/`classify-task`/`verify`/`rerank` (the `verdict-*` decision tools and
   their `tool-*` API routes) never reach `apply/`/`suggest/` at all — every
   field they decide is `action: "observe"`, since none of them maps to a
   native `Issue` field. They are observation/advisory tools, not routing
-  policies, and are documented as such (including what Jev cannot do — no
-  generation, not injection-aware) in the `jev-decisions` company skill.
-- Jev must never override a human-set `assigneeUserId`, and only overrides
+  policies, and are documented as such (including what decision models cannot do — no
+  generation, not injection-aware) in the `verdict-decisions` company skill.
+- Verdict must never override a human-set `assigneeUserId`, and only overrides
   other human-set fields (priority/status) when an operator has explicitly
   chosen `always_auto` for that policy — see `respectExistingFields` in
   config and the "Policy framework" section above.
 - Fail-open (bounded by `totalBudgetMs`) for observation/routing paths;
   fail-closed for budget exhaustion (`BudgetExceededError`) and for any
   `deny`-tier guard a future policy introduces.
-- Plugin events are fire-and-forget: nothing Jev does can veto a host action.
+- Plugin events are fire-and-forget: nothing Verdict does can veto a host action.
 
 ## Disaster recovery
 
-- All Jev-derived state is reconstructible from `jev_decisions`/
-  `jev_feedback` plus the host's own issue data — the plugin holds no other
+- All decision-derived state is reconstructible from `verdict_decisions`/
+  `verdict_feedback` plus the host's own issue data — the plugin holds no other
   durable state than those two tables, `ctx.state` idempotency leases
   (short TTL, safely lost on restart — redelivery just re-runs the policy),
   and the daily budget counters (`ctx.state`-backed; also safely reset-able,
   since a lost budget counter only risks a day's overspend, not data loss).
-- Losing the in-memory `JevCache` (`src/decision/cache.ts`) only costs a cache
+- Losing the in-memory `VerdictCache` (`src/decision/cache.ts`) only costs a cache
   miss on the next identical request; it holds no state that survives a
   worker restart by design.
 - Recovery from a bad deploy is a plugin disable/rollback (see "Deployment"
-  above); no migration in `migrations/001_jev_tables.sql` is destructive, so
+  above); no migration in `migrations/001_verdict_tables.sql` is destructive, so
   rolling back the plugin code does not require rolling back the schema.

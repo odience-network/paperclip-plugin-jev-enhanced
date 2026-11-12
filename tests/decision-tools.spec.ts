@@ -43,26 +43,26 @@ function harnessWithFetch(fetchImpl: Fetch, extraConfig: Record<string, unknown>
   return harness;
 }
 
-type Tool = "jev-ask" | "jev-classify-task" | "jev-verify" | "jev-rerank";
+type Tool = "verdict-ask" | "verdict-classify-task" | "verdict-verify" | "verdict-rerank";
 
 /**
- * `JevClient.ask` caches by policy + model + state/questions hash in a
- * process-lifetime cache (`worker.ts`'s module-level `jevCache`) — every
+ * `VerdictClient.ask` caches by policy + model + state/questions hash in a
+ * process-lifetime cache (`worker.ts`'s module-level `verdictCache`) — every
  * scenario below must use a distinct `nonce` so two tests for the same tool
  * never collide on a cache hit and silently skip each other's `fetchImpl`.
  */
 function toolParams(tool: Tool, nonce: string): unknown {
   switch (tool) {
-    case "jev-ask":
+    case "verdict-ask":
       return { state: `hello ${nonce}`, questions: { isBug: { type: "noul", instructions: "Is this a bug?" } } };
-    case "jev-classify-task":
+    case "verdict-classify-task":
       return {
         description: `Fix the login bug (${nonce})`,
         candidateSkills: [{ id: "skill_1", name: "Auth" }],
       };
-    case "jev-verify":
+    case "verdict-verify":
       return { claim: `this task is done (${nonce})`, evidence: "test suite: 42 passed, 0 failed" };
-    case "jev-rerank":
+    case "verdict-rerank":
       return {
         query: `how to reset a password (${nonce})`,
         candidates: [{ id: "c1", text: "Go to settings > reset password" }],
@@ -71,27 +71,27 @@ function toolParams(tool: Tool, nonce: string): unknown {
 }
 
 const TOOL_ANSWERS: Record<Tool, Record<string, unknown>> = {
-  "jev-ask": { isBug: noulAnswer(0.8) },
-  "jev-classify-task": {
+  "verdict-ask": { isBug: noulAnswer(0.8) },
+  "verdict-classify-task": {
     workKind: choiceAnswer("bug", WORK_KIND_CATALOG),
     modelTier: choiceAnswer("standard", MODEL_TIER_CATALOG),
     reviewDepth: choiceAnswer("standard", REVIEW_DEPTH_CATALOG),
     "loadSkill:skill_1": noulAnswer(0.9),
   },
-  "jev-verify": { relation: choiceAnswer("supports", VERIFY_RELATION_CATALOG) },
-  "jev-rerank": {
+  "verdict-verify": { relation: choiceAnswer("supports", VERIFY_RELATION_CATALOG) },
+  "verdict-rerank": {
     "relevant:c1": noulAnswer(0.9),
     "containsAnswer:c1": noulAnswer(0.85),
     "injection:c1": noulAnswer(0.05),
   },
 };
 
-const TOOLS: Tool[] = ["jev-ask", "jev-classify-task", "jev-verify", "jev-rerank"];
+const TOOLS: Tool[] = ["verdict-ask", "verdict-classify-task", "verdict-verify", "verdict-rerank"];
 const ROUTE_FOR: Record<Tool, string> = {
-  "jev-ask": "tool-ask",
-  "jev-classify-task": "tool-classify-task",
-  "jev-verify": "tool-verify",
-  "jev-rerank": "tool-rerank",
+  "verdict-ask": "tool-ask",
+  "verdict-classify-task": "tool-classify-task",
+  "verdict-verify": "tool-verify",
+  "verdict-rerank": "tool-rerank",
 };
 
 function apiInput(routeKey: string, body: unknown, overrides: Partial<PluginApiRequestInput> = {}): PluginApiRequestInput {
@@ -109,7 +109,7 @@ function apiInput(routeKey: string, body: unknown, overrides: Partial<PluginApiR
   };
 }
 
-describe("jev decision tools (MCP)", () => {
+describe("verdict decision tools (MCP)", () => {
   for (const tool of TOOLS) {
     it(`${tool} succeeds and returns a typed result plus a ledger row`, async () => {
       const harness = harnessWithFetch(
@@ -157,7 +157,7 @@ describe("jev decision tools (MCP)", () => {
       });
       await plugin.definition.setup(harness.ctx);
       await harness.ctx.state.set(
-        { scopeKind: "company", scopeId: "company-test", namespace: "jev-budget", stateKey: utcDateKey() },
+        { scopeKind: "company", scopeId: "company-test", namespace: "verdict-budget", stateKey: utcDateKey() },
         { tokens: 10, costUsd: 0.01 },
       );
 
@@ -180,21 +180,21 @@ describe("jev decision tools (MCP)", () => {
 /**
  * Caller-supplied identifiers (question names, candidate/skill ids) become
  * ledger `answers` keys, so they're bounded to `/^[A-Za-z0-9_.:-]{1,64}$/`.
- * `jev-verify` has no identifier field and is intentionally excluded.
+ * `verdict-verify` has no identifier field and is intentionally excluded.
  */
 const BAD_IDENTIFIER_PARAMS: Partial<Record<Tool, unknown>> = {
-  "jev-ask": { state: "hello", questions: { "bad name!": { type: "noul", instructions: "Is this a bug?" } } },
-  "jev-classify-task": {
+  "verdict-ask": { state: "hello", questions: { "bad name!": { type: "noul", instructions: "Is this a bug?" } } },
+  "verdict-classify-task": {
     description: "Fix the login bug",
     candidateSkills: [{ id: "bad id!", name: "Auth" }],
   },
-  "jev-rerank": {
+  "verdict-rerank": {
     query: "how to reset a password",
     candidates: [{ id: "bad id!", text: "Go to settings > reset password" }],
   },
 };
 
-describe("jev decision tools reject out-of-shape caller-supplied identifiers", () => {
+describe("verdict decision tools reject out-of-shape caller-supplied identifiers", () => {
   for (const [tool, params] of Object.entries(BAD_IDENTIFIER_PARAMS) as [Tool, unknown][]) {
     it(`${tool} (MCP) returns "invalid-params" for an identifier outside [A-Za-z0-9_.:-]{1,64}`, async () => {
       const harness = harnessWithFetch((async () => fixtureResponseFor(TOOL_ANSWERS[tool])) as Fetch);
@@ -217,7 +217,7 @@ describe("jev decision tools reject out-of-shape caller-supplied identifiers", (
   }
 });
 
-describe("jev decision tool API routes", () => {
+describe("verdict decision tool API routes", () => {
   for (const tool of TOOLS) {
     const routeKey = ROUTE_FOR[tool];
 
@@ -264,7 +264,7 @@ describe("jev decision tool API routes", () => {
       });
       await plugin.definition.setup(harness.ctx);
       await harness.ctx.state.set(
-        { scopeKind: "company", scopeId: "company_1", namespace: "jev-budget", stateKey: utcDateKey() },
+        { scopeKind: "company", scopeId: "company_1", namespace: "verdict-budget", stateKey: utcDateKey() },
         { tokens: 10, costUsd: 0.01 },
       );
 
@@ -312,7 +312,7 @@ describe("jev decision tool API routes", () => {
 
     expect(response.status).toBe(200);
     expect(Array.isArray(response.body)).toBe(true);
-    const query = harness.dbQueries.find((q) => q.sql.includes("jev_decisions"));
+    const query = harness.dbQueries.find((q) => q.sql.includes("verdict_decisions"));
     expect(query?.params).toEqual(["company_1", "issue_1", 20]);
   });
 
@@ -346,7 +346,7 @@ describe("jev decision tool API routes", () => {
       }),
     );
 
-    const query = harness.dbQueries.find((q) => q.sql.includes("jev_decisions"));
+    const query = harness.dbQueries.find((q) => q.sql.includes("verdict_decisions"));
     expect(query?.params).toEqual(["company_1", "issue_1", 5]);
   });
 });

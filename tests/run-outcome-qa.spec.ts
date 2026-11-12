@@ -5,8 +5,8 @@ import type { DecisionPipeline } from "../src/decision/pipeline.js";
 import { runOutcomeQaPolicy, type RunOutcomeQaState } from "../src/policies/run-outcome-qa.js";
 import { runPolicy } from "../src/policies/run.js";
 import type { PolicyContext } from "../src/policies/types.js";
-import type { JevAnswer } from "../src/decision/types.js";
-import { jevConfigSchema, type JevConfig } from "../src/config.js";
+import type { VerdictAnswer } from "../src/decision/types.js";
+import { verdictConfigSchema, type VerdictConfig } from "../src/config.js";
 import type { LedgerDb } from "../src/ledger/db.js";
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
@@ -20,7 +20,7 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 function createFakeDb(): LedgerDb {
   const rows = new Map<string, Record<string, unknown>>();
   return {
-    namespace: "plugin_jev_test",
+    namespace: "plugin_verdict_test",
     async execute(sql, params = []) {
       if (sql.includes("INSERT INTO")) {
         const [id] = params;
@@ -41,8 +41,8 @@ function createFakeDb(): LedgerDb {
   };
 }
 
-function baseConfig(overrides: Partial<JevConfig> = {}): JevConfig {
-  return jevConfigSchema.parse({ ...overrides });
+function baseConfig(overrides: Partial<VerdictConfig> = {}): VerdictConfig {
+  return verdictConfigSchema.parse({ ...overrides });
 }
 
 function baseState(overrides: Partial<RunOutcomeQaState> = {}): RunOutcomeQaState {
@@ -70,7 +70,7 @@ function baseCtx(overrides: Partial<PolicyContext> = {}): PolicyContext {
   };
 }
 
-function noulAnswer(p: number): JevAnswer {
+function noulAnswer(p: number): VerdictAnswer {
   return { type: "noul", noul: p };
 }
 
@@ -132,7 +132,7 @@ describe("runOutcomeQaPolicy.questions", () => {
 describe("runOutcomeQaPolicy.decide", () => {
   const thresholdCtx = baseCtx({ config: { enabled: true, mode: "shadow", thresholds: { confidenceMin: 0.7, marginMin: 0.15 }, alwaysAuto: false, options: {} } });
 
-  function answers(overrides: Partial<Record<string, JevAnswer>> = {}): Record<string, JevAnswer> {
+  function answers(overrides: Partial<Record<string, VerdictAnswer>> = {}): Record<string, VerdictAnswer> {
     return {
       completion_claim_present: noulAnswer(0.1),
       claim_supported_by_evidence: noulAnswer(0.1),
@@ -204,7 +204,7 @@ describe("runOutcomeQaPolicy.decide", () => {
 });
 
 describe("runOutcomeQaPolicy via runPolicy", () => {
-  function configFor(mode: "shadow" | "suggest" | "enforce"): JevConfig {
+  function configFor(mode: "shadow" | "suggest" | "enforce"): VerdictConfig {
     return baseConfig({
       policies: {
         "run-outcome-qa": { enabled: true, mode, thresholds: { confidenceMin: 0.7, marginMin: 0.15 }, alwaysAuto: false, options: {} },

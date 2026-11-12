@@ -43,7 +43,7 @@ function renderSettingsPage(companyId: string | null = "company_1") {
 
 const CONFIG_ROW = {
   id: "config_1",
-  pluginId: "odience.jev",
+  pluginId: "odience.verdict",
   companyId: "company_1",
   configJson: {
     apiKeyRef: { type: "secret_ref", secretId: "secret_1" },
@@ -72,9 +72,9 @@ describe("SettingsPage", () => {
     );
 
     renderSettingsPage();
-    expect(screen.getByText(/Loading Odience Jev settings/i)).toBeTruthy();
+    expect(screen.getByText(/Loading Verdict settings/i)).toBeTruthy();
     resolveFetch(new Response(JSON.stringify(null), { status: 200 }));
-    await waitFor(() => expect(screen.queryByText(/Loading Odience Jev settings/i)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/Loading Verdict settings/i)).toBeNull());
   });
 
   it("shows an empty-config state with defaults when no config row exists yet", async () => {
@@ -126,7 +126,7 @@ describe("SettingsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/plugins/odience.jev/config",
+        "/api/plugins/odience.verdict/config",
         expect.objectContaining({ method: "POST" }),
       ),
     );

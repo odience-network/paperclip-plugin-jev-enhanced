@@ -1,4 +1,4 @@
-import { DEFAULT_JEV_MODEL } from "./models.js";
+import { DEFAULT_TYPESAFE_MODEL } from "./models.js";
 import type { CostEstimate } from "./provider.js";
 import type { DecisionUsage } from "./types.js";
 
@@ -23,7 +23,7 @@ export interface RateCard {
 export const RATE_CARDS: Record<string, RateCard> = {
   typesafe: {
     version: "typesafe-2026-10-09",
-    models: { [DEFAULT_JEV_MODEL]: { input: 0.5, output: 1.5 } },
+    models: { [DEFAULT_TYPESAFE_MODEL]: { input: 0.5, output: 1.5 } },
     default: { input: 0.5, output: 1.5 },
   },
 };

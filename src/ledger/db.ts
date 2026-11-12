@@ -8,6 +8,6 @@ export interface LedgerDb {
   execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }>;
 }
 
-export function tableName(db: LedgerDb, table: "jev_decisions" | "jev_feedback"): string {
+export function tableName(db: LedgerDb, table: "verdict_decisions" | "verdict_feedback"): string {
   return `${db.namespace}.${table}`;
 }

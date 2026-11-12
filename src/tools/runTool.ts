@@ -2,7 +2,7 @@ import type { z } from "zod";
 import { classifyError } from "../decision/errors.js";
 import { runPolicy, type RunPolicyDeps, type RunPolicyResult } from "../policies/run.js";
 import type { Policy } from "../policies/types.js";
-import type { JevConfig } from "../config.js";
+import type { VerdictConfig } from "../config.js";
 
 export type ToolOutcome =
   | { ok: true; result: RunPolicyResult }
@@ -13,7 +13,7 @@ export interface RunDecisionToolInput<TParams, TState> {
   paramsSchema: z.ZodType<TParams>;
   toState: (params: TParams) => TState;
   policy: Policy<TState>;
-  config: JevConfig;
+  config: VerdictConfig;
   companyId: string;
   issueId?: (params: TParams) => string | null | undefined;
   runId?: string | null;
@@ -21,7 +21,7 @@ export interface RunDecisionToolInput<TParams, TState> {
 }
 
 /**
- * Shared entry point for every `jev:*` tool and API route handler: validates
+ * Shared entry point for every `verdict:*` tool and API route handler: validates
  * `rawParams` against the caller's own zod schema, then runs the policy
  * through the standard ledger/budget pipeline. Maps *any* failure — a
  * validation error or whatever `runPolicy` throws (budget exhaustion,

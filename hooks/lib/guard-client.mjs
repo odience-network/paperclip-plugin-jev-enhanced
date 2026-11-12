@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 
 /**
- * Shared transport for Claude Code harness hooks calling JevGuard's
- * `POST /plugins/odience.jev/api/guard/evaluate`. Kept dependency-free
+ * Shared transport for Claude Code harness hooks calling VerdictGuard's
+ * `POST /plugins/odience.verdict/api/guard/evaluate`. Kept dependency-free
  * (built-in `fetch`/`crypto` only, Node >=18) so hook scripts run without an
  * install step inside the coding agent's own sandbox.
  */
@@ -57,7 +57,7 @@ export function readHarnessEnv() {
     !runId && ENV.runId,
   ].filter(Boolean);
   if (missing.length > 0) {
-    throw new Error(`jevguard hook: missing required env vars: ${missing.join(", ")}`);
+    throw new Error(`verdictguard hook: missing required env vars: ${missing.join(", ")}`);
   }
   return {
     apiUrl,
@@ -79,7 +79,7 @@ export function readHarnessEnv() {
  * stderr warning; set `PAPERCLIP_GUARD_FAIL_CLOSED=1` to fail "deny" instead
  * for higher-security environments. This is a harness-level transport
  * fallback, independent of (and in addition to) the plugin's own
- * server-side fail-open/fail-closed logic for actual Jev-call failures —
+ * server-side fail-open/fail-closed logic for actual provider-call failures —
  * see docs/SECURITY.md.
  *
  * A non-2xx response is NOT automatically treated as a transport failure:
@@ -94,7 +94,7 @@ export async function evaluateGuard(env, body) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), env.timeoutMs);
   try {
-    const res = await fetch(`${env.apiUrl.replace(/\/$/, "")}/plugins/odience.jev/api/guard/evaluate`, {
+    const res = await fetch(`${env.apiUrl.replace(/\/$/, "")}/plugins/odience.verdict/api/guard/evaluate`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -112,7 +112,7 @@ export async function evaluateGuard(env, body) {
     if (!res.ok) {
       if (result && typeof result.decision === "string") {
         process.stderr.write(
-          `[jevguard] guard/evaluate returned ${res.status} (${result.reason ?? "no reason"}); honoring server decision "${result.decision}"\n`,
+          `[verdictguard] guard/evaluate returned ${res.status} (${result.reason ?? "no reason"}); honoring server decision "${result.decision}"\n`,
         );
         return result;
       }
@@ -125,7 +125,7 @@ export async function evaluateGuard(env, body) {
   } catch (error) {
     const fallbackDecision = env.failClosed ? "deny" : "allow";
     process.stderr.write(
-      `[jevguard] guard/evaluate call failed (${error?.message ?? error}); harness falling back to "${fallbackDecision}"\n`,
+      `[verdictguard] guard/evaluate call failed (${error?.message ?? error}); harness falling back to "${fallbackDecision}"\n`,
     );
     return {
       decision: fallbackDecision,

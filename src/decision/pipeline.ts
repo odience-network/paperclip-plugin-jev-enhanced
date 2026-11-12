@@ -1,6 +1,6 @@
 import { canonicalize, sha256Hex } from "./canonical.js";
 import { redactText, truncateHeadTail, DEFAULT_MAX_STATE_CHARS } from "./redact.js";
-import { cacheKeyFor, type JevCache } from "./cache.js";
+import { cacheKeyFor, type VerdictCache } from "./cache.js";
 import { BudgetExceededError, utcDateKey, type BudgetStore } from "./budget.js";
 import { Semaphore } from "./semaphore.js";
 import { CapabilityError, type CapabilityReason } from "./errors.js";
@@ -17,19 +17,19 @@ export interface DecisionPipelineOptions {
   dailyTokenBudget?: number;
   redactionPatterns?: readonly string[];
   maxStateChars?: number;
-  cache?: JevCache;
+  cache?: VerdictCache;
   budgetStore?: BudgetStore;
   now?: () => Date;
 }
 
-export interface JevAskInput {
+export interface VerdictAskInput {
   policy: string;
   companyId: string;
   state: unknown;
   questions: DecisionQuestions;
 }
 
-export interface JevAskOutcome {
+export interface VerdictAskOutcome {
   result: DecisionResult;
   stateHash: string;
   cached: boolean;
@@ -79,7 +79,7 @@ export function checkCapabilities(
 export class DecisionPipeline {
   private readonly providers: readonly DecisionProvider[];
   private readonly semaphore: Semaphore;
-  private readonly cache?: JevCache;
+  private readonly cache?: VerdictCache;
   private readonly budgetStore?: BudgetStore;
   private readonly dailyTokenBudget: number;
   private readonly redactionPatterns: readonly string[];
@@ -117,7 +117,7 @@ export class DecisionPipeline {
     return this.primary.kind;
   }
 
-  async ask(input: JevAskInput): Promise<JevAskOutcome> {
+  async ask(input: VerdictAskInput): Promise<VerdictAskOutcome> {
     const started = Date.now();
     const canonicalState = canonicalize(input.state);
     const redacted = redactText(canonicalState, this.redactionPatterns);
@@ -151,9 +151,9 @@ export class DecisionPipeline {
 
   private async askProvider(
     provider: DecisionProvider,
-    input: JevAskInput,
+    input: VerdictAskInput,
     prepared: { truncated: string; stateHash: string; questionsHash: string; started: number },
-  ): Promise<JevAskOutcome> {
+  ): Promise<VerdictAskOutcome> {
     const { truncated, stateHash, questionsHash, started } = prepared;
     const hostBilled = provider.capabilities.billing === "host";
     const cacheKey = cacheKeyFor({
@@ -218,7 +218,7 @@ export class DecisionPipeline {
 }
 
 /** The ledger columns describing who answered, for `completeDecision`. */
-export function answeredByFields(outcome: JevAskOutcome) {
+export function answeredByFields(outcome: VerdictAskOutcome) {
   return {
     provider: outcome.provider.id,
     providerKind: outcome.provider.kind,

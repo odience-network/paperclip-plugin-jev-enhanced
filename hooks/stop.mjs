@@ -37,7 +37,7 @@ export async function main() {
   process.stdout.write(
     JSON.stringify({
       decision: "block",
-      reason: `jevguard: completion claim not yet supported by evidence (${result.reason}). Provide concrete evidence (test output, diff, command result) before stopping.`,
+      reason: `verdictguard: completion claim not yet supported by evidence (${result.reason}). Provide concrete evidence (test output, diff, command result) before stopping.`,
     }),
   );
   process.exit(0);
@@ -73,7 +73,7 @@ export function lastAssistantMessage(transcriptPath) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((error) => {
-    process.stderr.write(`[jevguard] stop hook error: ${error?.stack ?? error}\n`);
+    process.stderr.write(`[verdictguard] stop hook error: ${error?.stack ?? error}\n`);
     process.exit(0);
   });
 }

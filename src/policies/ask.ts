@@ -4,7 +4,7 @@ import { confidenceMarginFor } from "./util.js";
 
 /**
  * Generic ask: the caller supplies both `state` and `questions` directly
- * (validated by `src/tools/schemas.ts` against the same `jevQuestionSchema`
+ * (validated by `src/tools/schemas.ts` against the same `verdictQuestionSchema`
  * the core connector uses, before this policy ever sees them) — this policy
  * exists only to run that pair through the standard ledger/budget pipeline,
  * never to interpret the answers itself. Every field is `"observe"`: a

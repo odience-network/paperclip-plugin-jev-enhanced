@@ -1,5 +1,5 @@
 import { noul, score } from "@typesafe-ai/sdk";
-import type { JevAnswer } from "../decision/types.js";
+import type { VerdictAnswer } from "../decision/types.js";
 import type { Policy, PolicyContext, PolicyVerdict } from "../policies/types.js";
 import type { GuardDecision } from "./types.js";
 
@@ -85,7 +85,7 @@ export const guardPrePolicy: Policy<GuardPreState> = {
     };
   },
 
-  decide(answers: Record<string, JevAnswer>, ctx: PolicyContext): PolicyVerdict {
+  decide(answers: Record<string, VerdictAnswer>, ctx: PolicyContext): PolicyVerdict {
     const riskAnswer = answers.risk;
     const risk = riskAnswer?.type === "score" ? riskAnswer.score : 0;
     const confidence = riskAnswer?.type === "score" ? riskAnswer.confidence : null;
@@ -140,6 +140,6 @@ export const guardPrePolicy: Policy<GuardPreState> = {
   },
 };
 
-function nullableNoul(answer: JevAnswer | undefined): number | null {
+function nullableNoul(answer: VerdictAnswer | undefined): number | null {
   return answer?.type === "noul" ? answer.noul : null;
 }

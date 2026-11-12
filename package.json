@@ -1,9 +1,9 @@
 {
-  "name": "@odience/paperclip-plugin-jev",
+  "name": "@odience/paperclip-plugin-verdict",
   "version": "0.1.0",
   "type": "module",
   "private": true,
-  "description": "TypeSafe Jev decision model integration for Paperclip agentic workflows",
+  "description": "Decision models for Paperclip: TypeSafe Jev, Cloudflare Clef, OpenAI Decisions, self-hosted",
   "scripts": {
     "build": "node ./esbuild.config.mjs",
     "build:rollup": "rollup -c",

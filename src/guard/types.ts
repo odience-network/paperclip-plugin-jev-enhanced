@@ -10,8 +10,8 @@ export type GuardDecision = (typeof GUARD_DECISIONS)[number];
  * What a hook script posts to `guard/evaluate`. Deliberately thin: no tool
  * input/output payload travels in this body. `excerpt` is the only free-text
  * field; it is capped here, then redacted and truncated again by
- * `JevClient.ask` (same pipeline every other policy's state goes through)
- * before it ever reaches Jev, and it never reaches the ledger — only the
+ * `VerdictClient.ask` (same pipeline every other policy's state goes through)
+ * before it ever reaches the provider, and it never reaches the ledger — only the
  * resulting decision, confidence, and latency are stored.
  */
 export const guardEvaluateRequestSchema = z.object({
@@ -27,8 +27,8 @@ export const guardEvaluateRequestSchema = z.object({
    * (`PreToolUse`), the tool's observed output (`PostToolUse`), or the
    * agent's final message (`Stop`). The hook script truncates this before
    * sending; the plugin redacts and truncates it again (same pipeline every
-   * other policy's state goes through, see `JevClient.ask`) before it ever
-   * reaches Jev, and it is never written to the ledger — only the resulting
+   * other policy's state goes through, see `VerdictClient.ask`) before it ever
+   * reaches the provider, and it is never written to the ledger — only the resulting
    * decision, confidence, and latency are stored. Capped well below the
    * client's own truncation so a hostile tool can't force an oversized body
    * through the route. */
@@ -51,7 +51,7 @@ export interface GuardEvaluateResult {
   reason: string;
   confidence: number | null;
   latencyMs: number;
-  /** `true` when a deterministic rail decided this without calling Jev. */
+  /** `true` when a deterministic rail decided this without calling the provider. */
   rail: boolean;
   /** Decision the policy would have made before the current policy `mode`
    * downgraded it (e.g. a `deny` intent recorded while `mode: "shadow"`

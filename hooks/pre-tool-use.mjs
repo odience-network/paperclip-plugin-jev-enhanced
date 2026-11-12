@@ -3,7 +3,7 @@ import { evaluateGuard, isHarnessDisabled, readHarnessEnv, readStdinJson, stable
 
 /**
  * Claude Code `PreToolUse` hook. Reads the hook event JSON from stdin
- * (`{tool_name, tool_input, ...}`), calls JevGuard's `guard/evaluate`, and
+ * (`{tool_name, tool_input, ...}`), calls VerdictGuard's `guard/evaluate`, and
  * emits a `PreToolUse`-shaped permission decision on stdout.
  *
  * Verify this output schema against the installed Claude Code version's
@@ -37,7 +37,7 @@ export async function main() {
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: result.decision, // "ask" | "deny"
-        permissionDecisionReason: `jevguard: ${result.reason}`,
+        permissionDecisionReason: `verdictguard: ${result.reason}`,
       },
     }),
   );
@@ -50,14 +50,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     // back per PAPERCLIP_GUARD_FAIL_CLOSED, same as a transport failure
     // inside evaluateGuard (this branch only runs for errors before that
     // point, e.g. missing env vars or a malformed stdin payload).
-    process.stderr.write(`[jevguard] pre-tool-use hook error: ${error?.stack ?? error}\n`);
+    process.stderr.write(`[verdictguard] pre-tool-use hook error: ${error?.stack ?? error}\n`);
     if (process.env.PAPERCLIP_GUARD_FAIL_CLOSED === "1") {
       process.stdout.write(
         JSON.stringify({
           hookSpecificOutput: {
             hookEventName: "PreToolUse",
             permissionDecision: "deny",
-            permissionDecisionReason: "jevguard: harness-configuration-error",
+            permissionDecisionReason: "verdictguard: harness-configuration-error",
           },
         }),
       );

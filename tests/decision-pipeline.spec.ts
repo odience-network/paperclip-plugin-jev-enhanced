@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTypesafePipeline } from "../src/decision/registry.js";
-import { JevValidationError } from "../src/decision/errors.js";
+import { VerdictValidationError } from "../src/decision/errors.js";
 import { BudgetExceededError, createInMemoryBudgetStore } from "../src/decision/budget.js";
-import { createInMemoryJevCache } from "../src/decision/cache.js";
+import { createInMemoryVerdictCache } from "../src/decision/cache.js";
 import type { Fetch } from "@typesafe-ai/sdk";
 
 const PING_QUESTIONS = { pong: { type: "noul" as const, instructions: "Is this a ping?" } };
@@ -46,7 +46,7 @@ describe("DecisionPipeline over the typesafe provider", () => {
 
     await expect(
       client.ask({ policy: "ping", companyId: "company_1", state: "hello", questions: PING_QUESTIONS }),
-    ).rejects.toThrow(JevValidationError);
+    ).rejects.toThrow(VerdictValidationError);
   });
 
   it("rejects a choice answer whose probabilities don't sum to 1", async () => {
@@ -63,7 +63,7 @@ describe("DecisionPipeline over the typesafe provider", () => {
 
     await expect(
       client.ask({ policy: "ping", companyId: "company_1", state: "hello", questions: PING_QUESTIONS }),
-    ).rejects.toThrow(JevValidationError);
+    ).rejects.toThrow(VerdictValidationError);
   });
 
   it("retries a 429 with Retry-After and succeeds on the next attempt", async () => {
@@ -92,7 +92,7 @@ describe("DecisionPipeline over the typesafe provider", () => {
 
   it("serves a repeated ask from cache without calling the provider again", async () => {
     const fetchImpl = vi.fn<Fetch>(async () => jsonResponse(fakeSuccessResult()));
-    const cache = createInMemoryJevCache();
+    const cache = createInMemoryVerdictCache();
     const client = createTypesafePipeline({ resolveApiKey: async () => "test-key", fetchImpl, cache });
     const input = { policy: "ping", companyId: "company_1", state: "hello", questions: PING_QUESTIONS };
 

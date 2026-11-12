@@ -4,7 +4,7 @@ import type { CalibrationReports } from "./types.js";
 
 /** Mirrors `src/manifest.ts`'s plugin id, declared locally so this browser
  * bundle never imports the worker-side manifest module. */
-const PLUGIN_ID = "odience.jev";
+const PLUGIN_ID = "odience.verdict";
 
 /** Mirrors `src/policies/index.ts`'s registry keys, declared locally so this
  * browser bundle never imports worker-side modules (that file pulls in
@@ -22,7 +22,7 @@ interface RawPolicyConfig {
   thresholds?: Record<string, number | Record<string, number>>;
 }
 
-interface RawJevConfig {
+interface RawVerdictConfig {
   apiKeyRef?: unknown;
   model?: string;
   baseUrl?: string;
@@ -35,7 +35,7 @@ interface RawJevConfig {
 }
 
 interface PluginConfigRow {
-  configJson: RawJevConfig;
+  configJson: RawVerdictConfig;
 }
 
 async function hostFetchJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -52,7 +52,7 @@ async function hostFetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 function useSettingsConfig(companyId: string | null) {
-  const [configJson, setConfigJson] = useState<RawJevConfig>({});
+  const [configJson, setConfigJson] = useState<RawVerdictConfig>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -84,7 +84,7 @@ function useSettingsConfig(companyId: string | null) {
     };
   }, [companyId]);
 
-  async function save(nextConfig: RawJevConfig): Promise<void> {
+  async function save(nextConfig: RawVerdictConfig): Promise<void> {
     if (!companyId) return;
     setSaving(true);
     setError(null);
@@ -178,14 +178,14 @@ export function SettingsPage({ context }: PluginSettingsPageProps) {
   }
 
   if (loading) {
-    return <div>Loading Odience Jev settings...</div>;
+    return <div>Loading Verdict settings...</div>;
   }
 
   return (
     <form onSubmit={(event) => void handleSubmit(event)} style={{ display: "grid", gap: "1rem", maxWidth: 640 }}>
       <p>
-        Odience Jev sends the issue text you route through its policies to TypeSafe's hosted Jev model
-        (api.typesafe.ai) over HTTPS. No raw issue state or free text is ever stored in the Jev ledger — only
+        Verdict sends the issue text you route through its policies to the configured decision provider (for example TypeSafe's hosted Jev model)
+        (api.typesafe.ai) over HTTPS. No raw issue state or free text is ever stored in the Verdict ledger — only
         policy outcomes, scores, and usage metadata. Use redaction patterns below to strip anything sensitive
         before it leaves this plugin.
       </p>

@@ -70,7 +70,7 @@ export interface RailDeps {
  * differently-worded same-tool call. See `docs/SECURITY.md` and
  * `hooks/README.md` for the operator-facing contract. */
 export function overrideStampKey(toolName: string, toolInputHash: string): string {
-  return `jev-override:${createHash("sha256").update(`${toolName}\u0000${toolInputHash}`).digest("hex")}`;
+  return `verdict-override:${createHash("sha256").update(`${toolName}\u0000${toolInputHash}`).digest("hex")}`;
 }
 
 /** What `killSwitch: "deny-all"` forces for a given hook kind. `Stop` has no
@@ -83,9 +83,9 @@ function denyAllDecisionFor(hookKind: GuardHookKind): GuardDecision {
 }
 
 /**
- * Deterministic, provider-independent checks run before any Jev call. The
+ * Deterministic, provider-independent checks run before any provider call. The
  * first rail that returns a verdict wins; `null` means "no rail applies,
- * proceed to Jev". Order matters: the kill switch is an absolute override,
+ * proceed to the provider". Order matters: the kill switch is an absolute override,
  * then the tool blocklist (so an operator-blocked tool can never be
  * overridden by a stamp, even a legitimate one), then a validated human
  * override stamp, then the remaining tool allow lists and the loop guard.
@@ -143,7 +143,7 @@ export async function runRails(
  * against a different or differently-shaped call), and have been resolved
  * within `overrideFreshnessMs` (so it can't be replayed indefinitely across
  * unrelated later calls on the same tool). Any mismatch falls through to the
- * normal Jev path rather than denying outright — a stale or malformed
+ * normal provider path rather than denying outright — a stale or malformed
  * override stamp is not itself evidence of risk.
  */
 async function checkOverrideStamp(

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseJevConfig, policyConfigFor } from "../src/config.js";
+import { parseVerdictConfig, policyConfigFor } from "../src/config.js";
 import { DecisionPipeline } from "../src/decision/pipeline.js";
 import type { DecisionProvider, ProviderCapabilities } from "../src/decision/provider.js";
-import { createInMemoryJevCache } from "../src/decision/cache.js";
+import { createInMemoryVerdictCache } from "../src/decision/cache.js";
 import {
   buildPolicyProviders,
   defaultProviderId,
@@ -60,7 +60,7 @@ function scriptedProvider(
 
 describe("registry: legacy config shim", () => {
   it("reads top-level apiKeyRef/model/baseUrl as an implicit typesafe provider", () => {
-    const config = parseJevConfig({ apiKeyRef: "ref", model: "jev-latest", baseUrl: "https://proxy.example.com" });
+    const config = parseVerdictConfig({ apiKeyRef: "ref", model: "jev-latest", baseUrl: "https://proxy.example.com" });
     expect(effectiveProviders(config)).toEqual({
       legacy: true,
       providers: {
@@ -75,26 +75,26 @@ describe("registry: legacy config shim", () => {
   });
 
   it("warns that the legacy fields are deprecated, and that they're ignored next to a providers map", () => {
-    const legacy = validateProviderConfig(parseJevConfig({ apiKeyRef: "ref" }), undefined);
+    const legacy = validateProviderConfig(parseVerdictConfig({ apiKeyRef: "ref" }), undefined);
     expect(legacy.errors).toEqual([]);
     expect(legacy.warnings).toEqual([expect.stringMatching(/deprecated/)]);
 
     const both = validateProviderConfig(
-      parseJevConfig({ apiKeyRef: "ref", providers: { typesafe: { kind: "systemone", apiKeyRef: "ref" } } }),
+      parseVerdictConfig({ apiKeyRef: "ref", providers: { typesafe: { kind: "systemone", apiKeyRef: "ref" } } }),
       undefined,
     );
     expect(both.warnings).toEqual([expect.stringMatching(/ignored/)]);
   });
 
   it("an empty config still resolves to the typesafe provider, with no warnings", () => {
-    const config = parseJevConfig({});
+    const config = parseVerdictConfig({});
     expect(defaultProviderId(config)).toBe("typesafe");
     expect(validateProviderConfig(config, undefined)).toEqual({ errors: [], warnings: [] });
   });
 });
 
 describe("registry: resolution", () => {
-  const config = parseJevConfig({
+  const config = parseVerdictConfig({
     providers: {
       typesafe: { kind: "systemone", preset: "typesafe", apiKeyRef: "ref" },
       local: { kind: "systemone", preset: "typesafe", baseUrl: "http://localhost:11434", authStyle: "none", model: "clef" },
@@ -126,13 +126,13 @@ describe("registry: resolution", () => {
   });
 
   it("keeps core when it's the only provider, so calls fail as provider-unavailable instead of silently", () => {
-    const coreOnly = parseJevConfig({ providers: { core: { kind: "core" } } });
+    const coreOnly = parseVerdictConfig({ providers: { core: { kind: "core" } } });
     const [provider] = buildPolicyProviders(coreOnly, "ping", runtime);
     expect(provider).toBeInstanceOf(CoreProvider);
   });
 
   it("reports unknown provider references and core-as-default on a host without the capability", () => {
-    const bad = parseJevConfig({
+    const bad = parseVerdictConfig({
       providers: { core: { kind: "core" }, typesafe: { kind: "systemone", preset: "nope", apiKeyRef: "r" } },
       defaultProvider: "core",
       shadowProviders: ["ghost"],
@@ -148,17 +148,17 @@ describe("registry: resolution", () => {
     ]);
     expect(report.warnings).toEqual([expect.stringMatching(/core: unavailable on this host/)]);
 
-    const onCapableHost = validateProviderConfig(parseJevConfig({ providers: { core: { kind: "core" } }, defaultProvider: "core" }), hostWithDecisions);
+    const onCapableHost = validateProviderConfig(parseVerdictConfig({ providers: { core: { kind: "core" } }, defaultProvider: "core" }), hostWithDecisions);
     expect(onCapableHost).toEqual({ errors: [], warnings: [] });
   });
 
   it("rejects provider kinds this build can't construct yet", () => {
-    expect(() => parseJevConfig({ providers: { cf: { kind: "cloudflare" } } })).toThrow();
+    expect(() => parseVerdictConfig({ providers: { cf: { kind: "cloudflare" } } })).toThrow();
   });
 });
 
 describe("policyConfigFor: provider-bound thresholds and mode", () => {
-  const config = parseJevConfig({
+  const config = parseVerdictConfig({
     policies: {
       "issue-triage": {
         mode: "suggest",
@@ -200,7 +200,7 @@ describe("policyConfigFor: provider-bound thresholds and mode", () => {
   });
 
   it("treats the typesafe preset as the baseline and everything else as not", () => {
-    const [typesafeProvider] = buildPolicyProviders(parseJevConfig({}), "ping", runtime);
+    const [typesafeProvider] = buildPolicyProviders(parseVerdictConfig({}), "ping", runtime);
     expect(providerBinding(typesafeProvider)).toEqual({ key: "typesafe/jev-1.13.0", confidence: "native", baseline: true });
     expect(providerBinding(new CoreProvider("core", undefined)).baseline).toBe(false);
   });
@@ -229,7 +229,7 @@ describe("pipeline: fallback chain and cache", () => {
   });
 
   it("keys the cache by provider, so two providers never share an answer", async () => {
-    const cache = createInMemoryJevCache();
+    const cache = createInMemoryVerdictCache();
     const a = scriptedProvider("a");
     const b = scriptedProvider("b");
     const input = { policy: "ping", companyId: "c1", state: "s", questions: { pong: { type: "boolean" as const } } };
@@ -246,7 +246,7 @@ describe("pipeline: fallback chain and cache", () => {
 });
 
 describe("runPolicy with providers", () => {
-  const suggestConfig = parseJevConfig({ policies: { ping: { mode: "suggest", thresholds: { pong: 0.5 } } } });
+  const suggestConfig = parseVerdictConfig({ policies: { ping: { mode: "suggest", thresholds: { pong: 0.5 } } } });
 
   it("records the answering fallback in the ledger and holds an uncalibrated fallback in shadow", async () => {
     const db = createFakeDb();
@@ -286,7 +286,7 @@ describe("runPolicy with providers", () => {
     const db = createFakeDb();
     const tiny = scriptedProvider("typesafe", { preset: "typesafe", caps: { questionTypes: ["choice"] } });
     const result = await runPolicy(
-      { policy: pingPolicy, state: { message: "ping" }, config: parseJevConfig({}), companyId: "c1", issueId: "i1" },
+      { policy: pingPolicy, state: { message: "ping" }, config: parseVerdictConfig({}), companyId: "c1", issueId: "i1" },
       { client: new DecisionPipeline({ providers: [tiny] }), db, apply: { log: vi.fn() }, suggest: { log: vi.fn() } },
     );
 
@@ -309,7 +309,7 @@ describe("runPolicy with providers", () => {
       },
     };
     const result = await runPolicy(
-      { policy: pingPolicy, state: { message: "ping" }, config: parseJevConfig({}), companyId: "c1", issueId: "i1" },
+      { policy: pingPolicy, state: { message: "ping" }, config: parseVerdictConfig({}), companyId: "c1", issueId: "i1" },
       { client: new DecisionPipeline({ providers: [new CoreProvider("core", host)] }), db, apply: { log: vi.fn() }, suggest: { log: vi.fn() } },
     );
     const row = await getDecisionById(db, "c1", (result as { decisionId: string }).decisionId);

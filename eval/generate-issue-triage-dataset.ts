@@ -14,7 +14,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { JevAnswer } from "../src/decision/types.js";
+import type { VerdictAnswer } from "../src/decision/types.js";
 import type { IssueTriageState, IssueTriageCandidateAgent, IssueTriageCandidateIssue } from "../src/policies/issue-triage.js";
 import { ISSUE_TYPE_CATALOG } from "../src/policies/issue-triage.js";
 import type { EvalCase } from "./types.js";
@@ -34,7 +34,7 @@ const OPEN_ISSUES: IssueTriageCandidateIssue[] = [
   { id: "issue_open_3", identifier: "ODIAA-2230", title: "Request confirmation card missing decline reason" },
 ];
 
-function choiceAnswer(labels: string[], pick: string, confidence: number): JevAnswer {
+function choiceAnswer(labels: string[], pick: string, confidence: number): VerdictAnswer {
   const others = labels.filter((l) => l !== pick);
   const rest = 1 - confidence;
   const share = others.length > 0 ? rest / others.length : 0;
@@ -43,7 +43,7 @@ function choiceAnswer(labels: string[], pick: string, confidence: number): JevAn
   return { type: "choice", choice: pick, confidence, probabilities };
 }
 
-function scoreAnswer(legend: Record<string, string>, pickIndex: number, confidence: number): JevAnswer {
+function scoreAnswer(legend: Record<string, string>, pickIndex: number, confidence: number): VerdictAnswer {
   const keys = Object.keys(legend);
   const others = keys.filter((_, i) => i !== pickIndex);
   const rest = 1 - confidence;
@@ -55,7 +55,7 @@ function scoreAnswer(legend: Record<string, string>, pickIndex: number, confiden
   return { type: "score", score: pickIndex, legend, probabilities, confidence };
 }
 
-function noulAnswer(p: number): JevAnswer {
+function noulAnswer(p: number): VerdictAnswer {
   return { type: "noul", noul: p };
 }
 
@@ -107,7 +107,7 @@ function buildCase(spec: RowSpec): EvalCase<IssueTriageState> {
     issueTypes: ISSUE_TYPE_CATALOG,
   };
 
-  const recordedAnswers: Record<string, JevAnswer> = {
+  const recordedAnswers: Record<string, VerdictAnswer> = {
     owner: choiceAnswer(ownerLabels, spec.ownerChoice, spec.ownerConfidence),
     priority: choiceAnswer(["critical", "high", "medium", "low"], spec.priorityChoice, spec.priorityConfidence ?? 0.85),
     issueType: choiceAnswer([...ISSUE_TYPE_CATALOG], spec.issueType, 0.85),
@@ -153,7 +153,7 @@ const bugs: Array<[string, string, string, number, number, string]> = [
   ["Nightly backlog sweep crashes on empty company list", "Job throws when ctx.companies.list() returns [].", "agent_sam", 0.88, 0, "medium"],
   ["Decision ledger rejects rows with null issueId", "Scheduled-job-triggered decisions have no issueId and insert fails.", "agent_ada", 0.9, 1, "high"],
   ["Dashboard widget shows 'never' after first successful ping", "Health timestamp isn't refreshing on the client poll.", "agent_grace", 0.76, 0, "low"],
-  ["Jev client retries exceed the total time budget", "Retry-After honoring loop can exceed totalBudgetMs under load.", "agent_ada", 0.94, 2, "high"],
+  ["Decision client retries exceed the total time budget", "Retry-After honoring loop can exceed totalBudgetMs under load.", "agent_ada", 0.94, 2, "high"],
   ["Budget store double-counts usage on retried requests", "A retried provider call adds usage twice to the daily budget.", "agent_ada", 0.85, 2, "critical"],
   ["Suggest-mode confirmation card text overflows on mobile", "detailsMarkdown with long field lists breaks the card layout.", "agent_grace", 0.7, 0, "low"],
   ["Redaction patterns regex can catch unrelated tokens", "A broad pattern over-redacts legitimate issue titles.", "agent_lin", 0.72, 1, "medium"],
@@ -161,7 +161,7 @@ const bugs: Array<[string, string, string, number, number, string]> = [
   ["issue.updated fires twice for one title edit", "Two events arrive for a single edit, re-triaging unnecessarily.", "agent_ada", 0.83, 1, "medium"],
   ["Secrets ref leaks into worker logs on client timeout", "A timeout error message interpolates the raw apiKeyRef instead of a redacted placeholder.", "agent_sam", 0.91, 1, "critical"],
   ["Eval runner divides by zero with an empty dataset", "summarize() throws instead of returning zeroed metrics when a dataset has no rows.", "agent_lin", 0.87, 0, "medium"],
-  ["Score answers with a single legend key fail validation", "Jev client rejects a score answer where legend has only one entry.", "agent_lin", 0.79, 1, "medium"],
+  ["Score answers with a single legend key fail validation", "Decision client rejects a score answer where legend has only one entry.", "agent_lin", 0.79, 1, "medium"],
   ["Company budget resets early due to timezone bug", "Daily budget appears to reset at local midnight instead of UTC midnight in one region.", "agent_sam", 0.86, 1, "high"],
   ["Issue-triage posts duplicate request_confirmation on retry", "A transient 500 from issues.requestConfirmation causes a second card to be posted after retry.", "agent_ada", 0.89, 2, "high"],
 ];
@@ -307,7 +307,7 @@ for (let i = 0; i < 4; i++) {
 
 // Prompt-injection-in-description edge cases: the description tries to
 // instruct the model directly. `expectedVerdict`/`humanVerdict` encode the
-// safe, correct triage a reviewer actually wants, documenting that Jev's
+// safe, correct triage a reviewer actually wants, documenting that the provider's
 // answer should come from policy questions, never from issue body text.
 const injections: Array<[string, string, string]> = [
   [

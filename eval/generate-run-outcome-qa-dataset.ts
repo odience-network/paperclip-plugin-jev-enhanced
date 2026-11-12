@@ -13,13 +13,13 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { JevAnswer } from "../src/decision/types.js";
+import type { VerdictAnswer } from "../src/decision/types.js";
 import type { RunOutcomeQaState, RunOutcomeQaRunStatus } from "../src/policies/run-outcome-qa.js";
 import type { EvalCase } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-function noulAnswer(p: number): JevAnswer {
+function noulAnswer(p: number): VerdictAnswer {
   return { type: "noul", noul: p };
 }
 
@@ -46,7 +46,7 @@ function buildCase(spec: RowSpec): EvalCase<RunOutcomeQaState> {
     isPluginOrigin: false,
   };
 
-  const recordedAnswers: Record<string, JevAnswer> = {
+  const recordedAnswers: Record<string, VerdictAnswer> = {
     completion_claim_present: noulAnswer(spec.completionClaim ?? 0.1),
     claim_supported_by_evidence: noulAnswer(spec.evidenceSupported ?? 0.1),
     tests_mentioned: noulAnswer(spec.testsMentioned ?? 0.1),

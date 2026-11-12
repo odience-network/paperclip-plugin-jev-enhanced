@@ -1,7 +1,7 @@
-# JevGuard eval report (ODIAA-2369)
+# VerdictGuard eval report (ODIAA-2369)
 
 **Run type:** recorded corpus, not a live shadow run. This plugin instance has
-no bound Jev/TypeSafe provider key yet (board-only install at the time of
+no bound TypeSafe provider key yet (board-only install at the time of
 writing — see `docs/SECURITY.md`), so the acceptance criterion "shadow run on
 >=200 real tool calls (or recorded corpus)" is satisfied via the recorded-corpus
 option: 228 synthetic-but-schema-valid rows built from labeled scenarios
@@ -19,7 +19,7 @@ pnpm eval --policy guard-stop
 Once a company has a bound provider key, this should be re-run as a real
 shadow-mode corpus (`mode: "shadow"` across all three guard policies) against
 actual tool-call traffic and the numbers below superseded. Tracked as a
-follow-up child issue: **ODIAA-2456** ("JevGuard: live shadow-mode re-run
+follow-up child issue: **ODIAA-2456** ("VerdictGuard: live shadow-mode re-run
 once board installs the plugin and binds the provider key").
 
 ## Results
@@ -58,13 +58,13 @@ guard-route overhead benchmark below.
 ## Guard route overhead (measured, not synthetic)
 
 `pnpm eval:bench-guard-route` (`eval/bench-guard-route.ts`) measures what
-this plugin itself adds on top of a Jev call — rails (`runRails`), ledger
+this plugin itself adds on top of a provider call — rails (`runRails`), ledger
 `beginDecision`/`completeDecision` writes, question-building, redaction, and
 `evaluateGuard`'s own control flow — by running `evaluateGuard` in-process
-with the Jev HTTP call stubbed to resolve immediately (no real network hop)
+with the provider HTTP call stubbed to resolve immediately (no real network hop)
 and the ledger backed by an in-memory fake (no real DB round trip). It is
 therefore a *lower bound* on real end-to-end latency, not a replacement for
-it: a real deployment adds real Jev network/inference time and a real
+it: a real deployment adds real provider network/inference time and a real
 database write on top of these numbers. 500 iterations per hook kind, after
 a 20-iteration warmup:
 
@@ -76,7 +76,7 @@ a 20-iteration warmup:
 
 This confirms the plugin's own overhead is negligible relative to
 `guardRails.timeBudgetMs`'s default 1500ms — essentially all of that budget
-is available for the actual Jev round trip. The `max` outliers (one-off GC
+is available for the actual provider round trip. The `max` outliers (one-off GC
 pauses / event-loop scheduling in the benchmark process itself, not a
 systemic issue) are well within the same budget too.
 

@@ -52,7 +52,7 @@ export interface IssueTriageState {
    * that treats `priority` as human-owned unless `alwaysAuto`. */
   isFirstTriage: boolean;
   /** `true` when this issue's `originKind` belongs to this plugin itself —
-   * `preFilter` skips these unconditionally so Jev never triages its own
+   * `preFilter` skips these unconditionally so Verdict never triages its own
    * side-effect issues. */
   isPluginOrigin: boolean;
   eligibleAgents: IssueTriageCandidateAgent[];

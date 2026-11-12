@@ -31,8 +31,8 @@ describe("DashboardWidget", () => {
     const { uninstall } = await installUiTestBridge({ companyId: "company_1" });
     try {
       renderWidget("company_1");
-      expect(screen.getByText(/Loading Jev dashboard/i)).toBeTruthy();
-      await waitFor(() => expect(screen.queryByText(/Loading Jev dashboard/i)).toBeNull());
+      expect(screen.getByText(/Loading Verdict dashboard/i)).toBeTruthy();
+      await waitFor(() => expect(screen.queryByText(/Loading Verdict dashboard/i)).toBeNull());
     } finally {
       uninstall();
     }

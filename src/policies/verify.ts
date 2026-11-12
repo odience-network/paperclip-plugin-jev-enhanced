@@ -9,7 +9,7 @@ export interface VerifyState {
    * the empty-input case". */
   claim: string;
   /** The evidence to check the claim against — e.g. test output, a diff, or
-   * a log excerpt. Jev is not injection-aware: `evidence` from an untrusted
+   * a log excerpt. Decision models are not injection-aware: `evidence` from an untrusted
    * source (like a PR description) must already have passed through this
    * plugin's redaction pipeline before `verify` is called. */
   evidence: string;

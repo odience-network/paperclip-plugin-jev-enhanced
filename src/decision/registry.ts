@@ -1,5 +1,5 @@
 import type { Fetch, RetryPolicy } from "@typesafe-ai/sdk";
-import type { JevConfig, ProviderBinding, ProviderConfig } from "../config.js";
+import type { VerdictConfig, ProviderBinding, ProviderConfig } from "../config.js";
 import { MissingApiKeyError } from "./errors.js";
 import { DecisionPipeline, type DecisionPipelineOptions } from "./pipeline.js";
 import { providerModelKey, type DecisionProvider } from "./provider.js";
@@ -12,7 +12,7 @@ export const LEGACY_PROVIDER_ID = "typesafe";
 
 export interface ProviderRuntime {
   /** Wraps `ctx.secrets.resolve`. Never a `process.env` lookup. */
-  resolveSecret: (ref: NonNullable<JevConfig["apiKeyRef"]>) => Promise<string>;
+  resolveSecret: (ref: NonNullable<VerdictConfig["apiKeyRef"]>) => Promise<string>;
   /** Whatever the host handed the worker (`ctx`); `core` feature-detects on it. */
   host?: unknown;
   timeoutMs?: number;
@@ -22,7 +22,7 @@ export interface ProviderRuntime {
 
 /** The provider map after the legacy shim: an empty `providers` map plus the
  * deprecated top-level fields becomes a single implicit `typesafe` entry. */
-export function effectiveProviders(config: JevConfig): { providers: Record<string, ProviderConfig>; legacy: boolean } {
+export function effectiveProviders(config: VerdictConfig): { providers: Record<string, ProviderConfig>; legacy: boolean } {
   if (Object.keys(config.providers).length > 0) return { providers: config.providers, legacy: false };
   return {
     providers: {
@@ -38,7 +38,7 @@ export function effectiveProviders(config: JevConfig): { providers: Record<strin
   };
 }
 
-export function defaultProviderId(config: JevConfig): string {
+export function defaultProviderId(config: VerdictConfig): string {
   const { providers } = effectiveProviders(config);
   if (config.defaultProvider) return config.defaultProvider;
   if (LEGACY_PROVIDER_ID in providers) return LEGACY_PROVIDER_ID;
@@ -51,7 +51,7 @@ export interface PolicyProviderIds {
   shadows: string[];
 }
 
-export function resolvePolicyProviderIds(config: JevConfig, policyName: string): PolicyProviderIds {
+export function resolvePolicyProviderIds(config: VerdictConfig, policyName: string): PolicyProviderIds {
   const policy = config.policies[policyName];
   const primary = policy?.provider ?? defaultProviderId(config);
   const fallbacks = (policy?.fallbackProviders ?? []).filter((id) => id !== primary);
@@ -91,7 +91,7 @@ export function buildProvider(id: string, providerConfig: ProviderConfig, runtim
 /** Builds the `[primary, ...fallbacks]` chain for one policy. `core` is
  * dropped from the chain on a host without the capability, unless it is the
  * only entry (then its calls fail as `provider-unavailable`). */
-export function buildPolicyProviders(config: JevConfig, policyName: string, runtime: ProviderRuntime): DecisionProvider[] {
+export function buildPolicyProviders(config: VerdictConfig, policyName: string, runtime: ProviderRuntime): DecisionProvider[] {
   const { providers } = effectiveProviders(config);
   const { primary, fallbacks } = resolvePolicyProviderIds(config, policyName);
   const chain = [primary, ...fallbacks].flatMap((id) => {
@@ -104,7 +104,7 @@ export function buildPolicyProviders(config: JevConfig, policyName: string, runt
 }
 
 export function buildPolicyPipeline(
-  config: JevConfig,
+  config: VerdictConfig,
   policyName: string,
   runtime: ProviderRuntime,
   options: Omit<DecisionPipelineOptions, "providers">,
@@ -122,7 +122,7 @@ export function providerBinding(provider: DecisionProvider): ProviderBinding {
 }
 
 /** Legacy convenience: a pipeline over one `typesafe` SystemOne provider,
- * from the flat options `JevClient` used to take. Used by tests and the
+ * from the flat options `VerdictClient` used to take. Used by tests and the
  * offline eval/bench scripts. */
 export function createTypesafePipeline(
   options: Omit<DecisionPipelineOptions, "providers"> & {
@@ -155,7 +155,7 @@ export interface ProviderConfigReport {
 
 /** Static checks for `onValidateConfig`: references resolve, presets exist,
  * `core` is only the default where the host exposes it, legacy fields warn. */
-export function validateProviderConfig(config: JevConfig, host: unknown): ProviderConfigReport {
+export function validateProviderConfig(config: VerdictConfig, host: unknown): ProviderConfigReport {
   const errors: string[] = [];
   const warnings: string[] = [];
   const { providers, legacy } = effectiveProviders(config);

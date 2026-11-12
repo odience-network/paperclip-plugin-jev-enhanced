@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import type { Fetch } from "@typesafe-ai/sdk";
-import { jevConfigSchema } from "../src/config.js";
+import { verdictConfigSchema } from "../src/config.js";
 import { createTypesafePipeline } from "../src/decision/registry.js";
 import type { LedgerDb } from "../src/ledger/db.js";
 import type { LoopGuardState } from "../src/guard/loopGuard.js";
@@ -16,7 +16,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * Measures the guard route's OWN overhead — rails, ledger `beginDecision`/
  * `completeDecision` writes, question-building, redaction, client-side
  * parsing/validation — with everything that isn't under this plugin's
- * control stubbed out: the Jev HTTP call resolves immediately in-process
+ * control stubbed out: the provider HTTP call resolves immediately in-process
  * (no real network hop), and the ledger is an in-memory fake (no real DB
  * round trip). This is NOT a substitute for the real provider's latency
  * (see `eval/REPORT.md`'s `avgLatencyMs`, which IS the (synthetic) provider
@@ -28,7 +28,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function noopDb(): LedgerDb {
   return {
-    namespace: "plugin_jev_bench",
+    namespace: "plugin_verdict_bench",
     async execute() {
       return { rowCount: 1 };
     },
@@ -92,7 +92,7 @@ async function benchHook(hookKind: GuardHookKind, iterations: number): Promise<B
     retry: { maxRetries: 0 },
   });
 
-  const config = jevConfigSchema.parse({
+  const config = verdictConfigSchema.parse({
     policies: {
       "guard-pre": { enabled: true, mode: "enforce", thresholds: {}, alwaysAuto: false, options: {} },
       "guard-post": { enabled: true, mode: "enforce", thresholds: {}, alwaysAuto: false, options: {} },

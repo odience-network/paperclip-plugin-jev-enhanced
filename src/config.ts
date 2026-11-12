@@ -4,7 +4,7 @@ export const POLICY_MODES = ["shadow", "suggest", "enforce"] as const;
 export type PolicyMode = (typeof POLICY_MODES)[number];
 
 /** Mirrors the shared `EnvSecretRefBinding` shape (`@paperclipai/shared`) without
- * importing it, so `parseJevConfig` stays usable from unit tests with no SDK
+ * importing it, so `parseVerdictConfig` stays usable from unit tests with no SDK
  * dependency. A bare string is also accepted for legacy secret-ref values. */
 const secretRefSchema = z.union([
   z.string(),
@@ -71,12 +71,12 @@ export type RawPolicyConfig = z.infer<typeof policyConfigSchema>;
  * provider that will answer, so `decide()` only ever reads plain numbers. */
 export type PolicyConfig = Omit<RawPolicyConfig, "thresholds"> & { thresholds: Record<string, number> };
 
-/** Tools JevGuard treats as read-only by default: skipped before any Jev call
+/** Tools VerdictGuard treats as read-only by default: skipped before any provider call
  * (and before the loop guard / override-stamp rails even run), since they
  * cannot mutate state or exfiltrate beyond what the agent already saw. Kept
  * deliberately short — anything with network or write side effects (`Bash`,
  * `WebFetch`, `Write`, `Edit`, `NotebookEdit`) must go through the full rail
- * + Jev pipeline even if a specific invocation looks harmless. */
+ * + provider pipeline even if a specific invocation looks harmless. */
 const DEFAULT_READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "TodoWrite", "NotebookRead"];
 
 const guardRateLimitConfigSchema = z.object({
@@ -107,15 +107,15 @@ const guardRailsConfigSchema = z.object({
    * fails `Stop` to `ask` instead (`Stop` has no `deny` in its decision
    * space — see `src/guard/stop.ts` — so there is nothing stronger than
    * "flag for human review" to force there). `"allow-all"` bypasses the
-   * guard entirely (including rails) — only for recovering from a Jev/host
+   * guard entirely (including rails) — only for recovering from a provider/host
    * outage that is itself blocking legitimate work; document the reason in
    * config history before flipping it.
    */
   killSwitch: z.enum(["none", "allow-all", "deny-all"]).default("none"),
   readOnlyTools: z.array(z.string()).default(DEFAULT_READ_ONLY_TOOLS),
-  /** Always denied before any Jev call, regardless of mode. */
+  /** Always denied before any provider call, regardless of mode. */
   blockedTools: z.array(z.string()).default([]),
-  /** Always allowed before any Jev call, regardless of mode. Distinct from
+  /** Always allowed before any provider call, regardless of mode. Distinct from
    * `readOnlyTools`: entries here are an explicit operator allowlist, not an
    * inferred-safe default. */
   alwaysAllowTools: z.array(z.string()).default([]),
@@ -123,14 +123,14 @@ const guardRailsConfigSchema = z.object({
   /** An accepted override stamp older than this is rejected, so a single
    * confirmation can't be replayed indefinitely across unrelated later calls. */
   overrideFreshnessMs: z.number().int().positive().default(900_000),
-  /** Wall-clock budget for the Jev call inside `guard/evaluate`. On timeout,
+  /** Wall-clock budget for the provider call inside `guard/evaluate`. On timeout,
    * `fallbackDecision(hookKind, mode)` decides: any mode other than
    * `enforce` fails open to `allow` (a `shadow`/`suggest` policy can't deny
    * anyway), `Stop` always fails open to `allow` (it has no `deny` in its
    * decision space), and only an `enforce`-mode PreToolUse/PostToolUse call
    * fails closed, to `ask` — never a `deny` manufactured purely from a
-   * timeout. This only governs the Jev call itself; a `bypassMode` rail
-   * (kill switch, blocklist, loop guard) runs before the Jev call and is
+   * timeout. This only governs the provider call itself; a `bypassMode` rail
+   * (kill switch, blocklist, loop guard) runs before the provider call and is
    * unaffected by this budget — see `src/guard/evaluate.ts`. */
   timeBudgetMs: z.number().int().positive().default(1500),
   rateLimit: guardRateLimitConfigSchema.default(guardRateLimitConfigSchema.parse({})),
@@ -157,7 +157,7 @@ const providerConfigSchema = z.discriminatedUnion("kind", [
 ]);
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 
-export const jevConfigSchema = z.object({
+export const verdictConfigSchema = z.object({
   /** Deprecated: read as an implicit `typesafe` provider when `providers` is empty. */
   apiKeyRef: secretRefSchema.optional(),
   /** Deprecated, see `apiKeyRef`. */
@@ -174,12 +174,12 @@ export const jevConfigSchema = z.object({
   redactionPatterns: z.array(z.string()).default([]),
   respectExistingFields: z.boolean().default(true),
   guardRails: guardRailsConfigSchema.default(guardRailsConfigSchema.parse({})),
-  /** Origins (`https://host[:port]`, no path) `jev:decide-browser-action` may
+  /** Origins (`https://host[:port]`, no path) `verdict:decide-browser-action` may
    * reason about. Checked deterministically before any provider call —
    * never relaxed by a policy threshold or by the model's own judgement. */
   browserAllowedOrigins: z.array(browserOriginSchema).default([]),
 });
-export type JevConfig = z.infer<typeof jevConfigSchema>;
+export type VerdictConfig = z.infer<typeof verdictConfigSchema>;
 
 /** What `policyConfigFor` needs to know about the provider that will answer. */
 export interface ProviderBinding {
@@ -199,7 +199,7 @@ export interface ProviderBinding {
  * reports no confidence, or when it isn't the baseline provider and has no
  * thresholds of its own (a policy promoted on one provider is not promoted on
  * another until it's calibrated there). */
-export function policyConfigFor(config: JevConfig, policyName: string, binding?: ProviderBinding): PolicyConfig {
+export function policyConfigFor(config: VerdictConfig, policyName: string, binding?: ProviderBinding): PolicyConfig {
   const raw = config.policies[policyName];
   if (!raw) return { enabled: true, mode: "shadow", thresholds: {}, alwaysAuto: false, options: {} };
 
@@ -218,6 +218,6 @@ export function policyConfigFor(config: JevConfig, policyName: string, binding?:
   return { ...raw, thresholds, mode };
 }
 
-export function parseJevConfig(raw: Record<string, unknown>): JevConfig {
-  return jevConfigSchema.parse(raw);
+export function parseVerdictConfig(raw: Record<string, unknown>): VerdictConfig {
+  return verdictConfigSchema.parse(raw);
 }

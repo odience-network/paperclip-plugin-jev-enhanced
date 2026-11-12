@@ -1,4 +1,4 @@
-import type { DecisionQuestions, JevAnswer } from "../decision/types.js";
+import type { DecisionQuestions, VerdictAnswer } from "../decision/types.js";
 import type { PolicyConfig, PolicyMode } from "../config.js";
 
 export interface PolicyContext {
@@ -8,7 +8,7 @@ export interface PolicyContext {
   agentId?: string | null;
   /** Resolved `{enabled, mode, thresholds}` for this policy from company config. */
   config: PolicyConfig;
-  /** Top-level `JevConfig.respectExistingFields` for this company. A policy
+  /** Top-level `VerdictConfig.respectExistingFields` for this company. A policy
    * that patches real issue fields must not overwrite one a human already
    * set while this is `true`, unless `alwaysAuto` is also `true`. Treated as
    * `true` (the safe default) when a caller doesn't thread it through. */
@@ -18,7 +18,7 @@ export interface PolicyContext {
    * write `assigneeUserId` — that rule has no override. */
   alwaysAuto?: boolean;
   /** SHA-256 hash of the canonicalized state this decision is about to send
-   * (same pipeline `JevClient.ask()` uses), precomputed by the caller so
+   * (same pipeline `VerdictClient.ask()` uses), precomputed by the caller so
    * `preFilter` can dedupe without an extra provider round trip. */
   stateHash?: string | null;
   /** The previous decision's `stateHash` for this issue, from the ledger, if
@@ -59,7 +59,7 @@ export interface PolicyVerdict {
 
 /**
  * The shape every policy implements: a local `preFilter` that can skip a
- * provider call entirely, `questions` that describe what to ask Jev, and
+ * provider call entirely, `questions` that describe what to ask the provider, and
  * `decide` that interprets the answers against this company's thresholds.
  * Side effects of an `enforce`-mode decision belong in `src/apply/`, never here.
  */
@@ -84,5 +84,5 @@ export interface Policy<TState = unknown> {
    * through so a multi-question policy can gate on candidate-set size (e.g.
    * "state size < C") without the framework needing a dedicated field for
    * it. Optional so single-question policies like `ping` can ignore it. */
-  decide(answers: Record<string, JevAnswer>, ctx: PolicyContext, state?: TState): PolicyVerdict;
+  decide(answers: Record<string, VerdictAnswer>, ctx: PolicyContext, state?: TState): PolicyVerdict;
 }

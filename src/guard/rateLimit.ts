@@ -3,11 +3,11 @@
  * capping requests/second, one capping (estimated) tokens/second. Guards
  * against the route itself becoming a DoS vector — a hostile or buggy agent
  * firing PreToolUse calls in a tight loop must hit this limit long before it
- * could exhaust the daily Jev token budget or starve other companies' calls
+ * could exhaust the daily decision token budget or starve other companies' calls
  * on a shared worker (see docs/SECURITY.md "Rate limits").
  *
  * In-memory and per-worker-process; acceptable because this bounds load on
- * *this* worker's outbound Jev calls, not a cross-process invariant.
+ * *this* worker's outbound provider calls, not a cross-process invariant.
  */
 export class TokenBucket {
   private tokens: number;

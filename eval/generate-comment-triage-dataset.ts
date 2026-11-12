@@ -14,19 +14,19 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { JevAnswer } from "../src/decision/types.js";
+import type { VerdictAnswer } from "../src/decision/types.js";
 import type { CommentTriageState } from "../src/policies/comment-triage.js";
 import type { EvalCase } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-function noulAnswer(p: number): JevAnswer {
+function noulAnswer(p: number): VerdictAnswer {
   return { type: "noul", noul: p };
 }
 
 const URGENCY_LEGEND = { "0": "low", "1": "medium", "2": "high", "3": "critical" };
 
-function scoreAnswer(pickIndex: number, confidence: number): JevAnswer {
+function scoreAnswer(pickIndex: number, confidence: number): VerdictAnswer {
   const keys = Object.keys(URGENCY_LEGEND);
   const others = keys.filter((_, i) => i !== pickIndex);
   const rest = 1 - confidence;
@@ -64,7 +64,7 @@ function buildCase(spec: RowSpec): EvalCase<CommentTriageState> {
     isPluginOrigin: false,
   };
 
-  const recordedAnswers: Record<string, JevAnswer> = {
+  const recordedAnswers: Record<string, VerdictAnswer> = {
     is_question_for_human: noulAnswer(spec.isQuestion ?? 0.1),
     contains_decision_or_approval: noulAnswer(spec.isDecision ?? 0.1),
     is_blocker_report: noulAnswer(spec.isBlocker ?? 0.1),
