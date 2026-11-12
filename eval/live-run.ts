@@ -2,7 +2,7 @@
  * Live shadow run over a synthetic eval dataset (G5, ODIAA-2472). Developer
  * machines only, never CI:
  *
- *   tsx eval/live-run.ts --policy issue-triage [--env-file ../.env] [--concurrency 4]
+ *   tsx eval/live-run.ts --policy issue-triage [--dataset <cases.jsonl>] [--out <ledger.jsonl>] [--env-file ../.env] [--concurrency 4]
  *
  * Every dataset case goes through the real `runPolicy` path with the Tier A
  * providers configured the way an operator would: `typesafe/jev-1.13.0` as the
@@ -10,7 +10,9 @@
  * becomes one `decision_group_id` with a row per provider. The policy runs in
  * `shadow` mode against an in-memory ledger: nothing is applied or suggested.
  *
- * Output: `eval/datasets/live/<policy>.ledger.jsonl`, one ledger row per line
+ * Output: `eval/datasets/live/<policy>.ledger.jsonl` unless `--out` is given
+ * (use a path under the gitignored `eval/results/` for a dataset built from
+ * real company data), one ledger row per line
  * (the same `DecisionRow` shape a ledger export has), read by
  * `eval/compare.ts` and the per-policy report scripts.
  *
@@ -45,13 +47,14 @@ export const LIVE_TARGETS = {
 export const LIVE_PRIMARY = "typesafe";
 
 function parseArgs(argv: string[]) {
-  const args: { policy?: string; dataset?: string; envFile: string; concurrency: number; limit?: number } = {
+  const args: { policy?: string; dataset?: string; out?: string; envFile: string; concurrency: number; limit?: number } = {
     envFile: ".env",
     concurrency: 4,
   };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--policy") args.policy = argv[++i];
     else if (argv[i] === "--dataset") args.dataset = argv[++i];
+    else if (argv[i] === "--out") args.out = argv[++i];
     else if (argv[i] === "--env-file") args.envFile = argv[++i];
     else if (argv[i] === "--concurrency") args.concurrency = Number(argv[++i]);
     else if (argv[i] === "--limit") args.limit = Number(argv[++i]);
@@ -118,7 +121,7 @@ async function main() {
   const leaked = [...Object.values(tokens), accountId].filter((secret) => text.includes(secret));
   if (leaked.length > 0) throw new Error("Ledger export contains a token or the account id; nothing written");
 
-  const outPath = join(__dirname, "datasets", "live", `${policy.name}.ledger.jsonl`);
+  const outPath = args.out ? resolve(args.out) : join(__dirname, "datasets", "live", `${policy.name}.ledger.jsonl`);
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, `${text}\n`);
   console.log(`Wrote ${rows.length} ledger rows to ${outPath}`);
