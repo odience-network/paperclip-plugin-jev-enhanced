@@ -1,5 +1,6 @@
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { Fetch } from "@typesafe-ai/sdk";
 
 /** One request the mock server received, as the contract suite asserts on it. */
 export interface RecordedRequest {
@@ -7,6 +8,8 @@ export interface RecordedRequest {
   path: string;
   headers: IncomingHttpHeaders;
   body: unknown;
+  /** The body as sent, for assertions on serialized key order. */
+  rawBody: string;
 }
 
 /** What the server replies with. `delayMs` holds the response back, for
@@ -22,6 +25,10 @@ export type MockHandler = (request: RecordedRequest) => MockReply;
 
 export interface MockSystemOneServer {
   baseUrl: string;
+  /** `baseUrl` with an `https:` scheme, for configuring a credentialed
+   * provider (config validation rejects `http:` for those). Reach it through
+   * `plainHttpFetch`. */
+  secureBaseUrl: string;
   requests: RecordedRequest[];
   /** Replaces the handler for subsequent requests. */
   respondWith(handler: MockHandler): void;
@@ -56,6 +63,10 @@ export function syntheticSystemOneReply(request: RecordedRequest): MockReply {
   return { body: { model: body.model, answers, usage: { input_tokens: 1_000, output_tokens: 10 } } };
 }
 
+/** Stands in for TLS in tests: sends a request for a mock server's
+ * `secureBaseUrl` to its plain-HTTP loopback port. Anything else passes through. */
+export const plainHttpFetch: Fetch = (input, init) => fetch(String(input).replace(/^https:\/\/127\.0\.0\.1:/, "http://127.0.0.1:"), init);
+
 /** In-process SystemOne-shaped HTTP server on an ephemeral loopback port.
  * Records every request and replays whatever the current handler returns. */
 export async function startMockSystemOneServer(handler: MockHandler = syntheticSystemOneReply): Promise<MockSystemOneServer> {
@@ -71,6 +82,7 @@ export async function startMockSystemOneServer(handler: MockHandler = syntheticS
         path: req.url ?? "/",
         headers: req.headers,
         body: text ? JSON.parse(text) : undefined,
+        rawBody: text,
       };
       requests.push(recorded);
       const reply = current(recorded);
@@ -87,6 +99,7 @@ export async function startMockSystemOneServer(handler: MockHandler = syntheticS
   const { port } = server.address() as AddressInfo;
   return {
     baseUrl: `http://127.0.0.1:${port}`,
+    secureBaseUrl: `https://127.0.0.1:${port}`,
     requests,
     respondWith(next) {
       current = next;

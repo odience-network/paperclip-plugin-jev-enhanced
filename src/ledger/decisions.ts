@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PolicyMode } from "../config.js";
+import type { ConfidenceSource } from "../decision/confidence.js";
+import type { ErrorClass } from "../decision/errors.js";
 import type { ProviderKind } from "../decision/provider.js";
 import { type LedgerDb, tableName } from "./db.js";
 
@@ -53,9 +55,16 @@ export interface CompleteDecisionInput {
   model?: string;
   rateVersion?: string | null;
   hostInvocationId?: string | null;
+  /** Whether choice/score confidences came from the provider or were derived
+   * from its probabilities; `null` when no answer carries one. */
+  confidenceSource?: ConfidenceSource | null;
   /** Set when the answering provider's binding forced a different mode than
    * the one recorded at `beginDecision` time. */
   mode?: PolicyMode;
+  /** Why the chain moved past the provider before the one that answered. */
+  fallbackFrom?: string | null;
+  /** Set on `error` rows. */
+  errorClass?: ErrorClass | null;
 }
 
 export interface DecisionRow {
@@ -81,8 +90,13 @@ export interface DecisionRow {
   toolName: string | null;
   provider: string;
   providerKind: ProviderKind;
+  /** The chain head; differs from `provider` when a fallback answered. */
+  requestedProvider: string;
+  fallbackFrom: string | null;
+  errorClass: ErrorClass | null;
   rateVersion: string | null;
   hostInvocationId: string | null;
+  confidenceSource: ConfidenceSource | null;
   decisionGroupId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -111,8 +125,12 @@ interface DecisionDbRow {
   tool_name: string | null;
   provider?: string;
   provider_kind?: ProviderKind;
+  requested_provider?: string | null;
+  fallback_from?: string | null;
+  error_class?: ErrorClass | null;
   rate_version?: string | null;
   host_invocation_id?: string | null;
+  confidence_source?: ConfidenceSource | null;
   decision_group_id?: string | null;
   created_at: string;
   updated_at: string;
@@ -142,8 +160,12 @@ function fromDbRow(row: DecisionDbRow): DecisionRow {
     toolName: row.tool_name,
     provider: row.provider ?? "typesafe",
     providerKind: row.provider_kind ?? "systemone",
+    requestedProvider: row.requested_provider ?? row.provider ?? "typesafe",
+    fallbackFrom: row.fallback_from ?? null,
+    errorClass: row.error_class ?? null,
     rateVersion: row.rate_version ?? null,
     hostInvocationId: row.host_invocation_id ?? null,
+    confidenceSource: row.confidence_source ?? null,
     decisionGroupId: row.decision_group_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -161,8 +183,8 @@ export async function beginDecision(db: LedgerDb, input: BeginDecisionInput): Pr
   await db.execute(
     `INSERT INTO ${tableName(db, "verdict_decisions")}
        (id, company_id, issue_id, run_id, agent_id, policy, policy_version, question_version, model, state_hash, mode, outcome, tool_name,
-        provider, provider_kind, decision_group_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'observed', $12, $13, $14, $15)`,
+        provider, provider_kind, decision_group_id, requested_provider)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'observed', $12, $13, $14, $15, $13)`,
     [
       id,
       input.companyId,
@@ -202,6 +224,9 @@ export async function completeDecision(db: LedgerDb, id: string, patch: Complete
          rate_version = $14,
          host_invocation_id = $15,
          mode = coalesce($16, mode),
+         fallback_from = $17,
+         error_class = $18,
+         confidence_source = $19,
          updated_at = now()
      WHERE id = $1`,
     [
@@ -221,9 +246,17 @@ export async function completeDecision(db: LedgerDb, id: string, patch: Complete
       patch.rateVersion ?? null,
       patch.hostInvocationId ?? null,
       patch.mode ?? null,
+      patch.fallbackFrom ?? null,
+      patch.errorClass ?? null,
+      patch.confidenceSource ?? null,
     ],
   );
 }
+
+/** Shadow-provider rows share their primary's `decision_group_id`; the primary
+ * row is the one whose group id is its own. "Latest decision" reads only ever
+ * see primary rows, so a shadow answer never shows as the policy's decision. */
+const PRIMARY_ROW = "(decision_group_id IS NULL OR decision_group_id = id)";
 
 /** Hard ceiling on `listDecisionHistory`'s `limit`, independent of what a
  * caller requests, so a single UI/API call can't force an unbounded scan. */
@@ -237,7 +270,7 @@ const MAX_DECISION_HISTORY_LIMIT = 100;
 export async function getLatestDecision(db: LedgerDb, companyId: string, issueId: string): Promise<DecisionRow | null> {
   const rows = await db.query<DecisionDbRow>(
     `SELECT * FROM ${tableName(db, "verdict_decisions")}
-     WHERE company_id = $1 AND issue_id = $2
+     WHERE company_id = $1 AND issue_id = $2 AND ${PRIMARY_ROW}
      ORDER BY created_at DESC LIMIT 1`,
     [companyId, issueId],
   );
@@ -258,7 +291,7 @@ export async function getLatestDecisionForPolicy(
 ): Promise<DecisionRow | null> {
   const rows = await db.query<DecisionDbRow>(
     `SELECT * FROM ${tableName(db, "verdict_decisions")}
-     WHERE company_id = $1 AND issue_id = $2 AND policy = $3
+     WHERE company_id = $1 AND issue_id = $2 AND policy = $3 AND ${PRIMARY_ROW}
      ORDER BY created_at DESC LIMIT 1`,
     [companyId, issueId, policy],
   );
@@ -332,7 +365,7 @@ export async function listLatestDecisionsByPolicy(
 ): Promise<DecisionRow[]> {
   const rows = await db.query<DecisionDbRow>(
     `SELECT DISTINCT ON (policy) * FROM ${tableName(db, "verdict_decisions")}
-     WHERE company_id = $1 AND issue_id = $2
+     WHERE company_id = $1 AND issue_id = $2 AND ${PRIMARY_ROW}
      ORDER BY policy, created_at DESC`,
     [companyId, issueId],
   );
@@ -381,12 +414,13 @@ interface ModeSplitDbRow {
   count: string;
 }
 
-/** Shadow vs. suggest vs. enforce split for the T5 dashboard widget. */
+/** Shadow vs. suggest vs. enforce split for the T5 dashboard widget. Shadow-
+ * provider rows are left out: they are comparisons, not policy decisions. */
 export async function getModeSplit(db: LedgerDb, companyId: string): Promise<Record<PolicyMode, number>> {
   const rows = await db.query<ModeSplitDbRow>(
     `SELECT mode, count(*)::text AS count
      FROM ${tableName(db, "verdict_decisions")}
-     WHERE company_id = $1
+     WHERE company_id = $1 AND ${PRIMARY_ROW}
      GROUP BY mode`,
     [companyId],
   );

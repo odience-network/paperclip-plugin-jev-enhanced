@@ -1,4 +1,5 @@
-import { noul, type Questions } from "@typesafe-ai/sdk";
+import { noul } from "@typesafe-ai/sdk";
+import type { DecisionQuestions } from "../decision/types.js";
 import { confidenceMarginFor } from "./issue-triage.js";
 import type { FieldDecision, Policy, PolicyVerdict } from "./types.js";
 
@@ -43,7 +44,7 @@ export const runOutcomeQaPolicy: Policy<RunOutcomeQaState> = {
     return true;
   },
 
-  questions(): Questions {
+  questions(): DecisionQuestions {
     // Question text is static and never interpolates the comment body or
     // issue title/description — that text only reaches the provider through
     // `state`, which goes through the redaction/truncation pipeline first.

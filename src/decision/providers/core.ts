@@ -1,3 +1,4 @@
+import { withDerivedConfidence } from "../confidence.js";
 import { VerdictValidationError, ProviderUnavailableError } from "../errors.js";
 import type {
   DecisionProvider,
@@ -86,14 +87,16 @@ export class CoreProvider implements DecisionProvider {
       },
       { signal: opts.signal },
     );
-    const parsed = verdictAskResultSchema.safeParse({
+    const { raw: filled, confidenceSource } = withDerivedConfidence({
       model: raw.model,
       answers: raw.answers,
       usage: raw.usage ?? { input_tokens: 0, output_tokens: 0 },
     });
+    const parsed = verdictAskResultSchema.safeParse(filled);
     if (!parsed.success) {
       throw new VerdictValidationError(`Core decision response failed validation: ${parsed.error.message}`, parsed.error);
     }
-    return typeof raw.invocationId === "string" ? { ...parsed.data, hostInvocationId: raw.invocationId } : parsed.data;
+    const decision = { ...parsed.data, confidenceSource };
+    return typeof raw.invocationId === "string" ? { ...decision, hostInvocationId: raw.invocationId } : decision;
   }
 }

@@ -1,3 +1,4 @@
+import type { ChoiceRanking } from "../decision/pipeline.js";
 import type { DecisionQuestions, VerdictAnswer } from "../decision/types.js";
 import type { PolicyConfig, PolicyMode } from "../config.js";
 
@@ -80,6 +81,10 @@ export interface Policy<TState = unknown> {
    * policy doesn't define this. */
   identityState?(state: TState): unknown;
   questions(state: TState, ctx: PolicyContext): DecisionQuestions;
+  /** Choice questions whose options may be capped by ranking when a
+   * provider's `maxChoiceOptions` is below the candidate count (plan 2.2).
+   * Without it, an oversized question is skipped with a capability reason. */
+  rankChoices?(state: TState, ctx: PolicyContext): Record<string, ChoiceRanking>;
   /** `state` is the same value passed to `questions`/`preFilter`, threaded
    * through so a multi-question policy can gate on candidate-set size (e.g.
    * "state size < C") without the framework needing a dedicated field for

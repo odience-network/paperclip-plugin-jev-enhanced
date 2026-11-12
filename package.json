@@ -11,6 +11,7 @@
     "dev:ui": "paperclip-plugin-dev-server --root . --ui-dir dist/ui --port 4177",
     "test": "vitest run --config ./vitest.config.ts",
     "test:live": "vitest run --config ./vitest.live.config.ts",
+    "fixtures:record": "tsx tests/live/record-fixtures.ts",
     "typecheck": "tsc --noEmit",
     "eval": "tsx eval/run.ts",
     "eval:bench-guard": "tsx eval/bench-guard-route.ts"
@@ -27,13 +28,16 @@
   ],
   "author": "Odience",
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
   "pnpm": {
     "overrides": {
       "@paperclipai/shared": "file:.paperclip-sdk/paperclipai-shared-0.3.1.tgz"
     }
   },
   "dependencies": {
-    "@typesafe-ai/sdk": "0.6.0",
+    "@typesafe-ai/sdk": "0.7.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

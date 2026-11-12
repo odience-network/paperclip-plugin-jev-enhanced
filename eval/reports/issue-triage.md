@@ -100,6 +100,18 @@ Re-sweep against the real ledger once `shadow` mode has accumulated decisions on
 issues, and keep `enforce` mode gated behind a manual promotion decision regardless of
 what the sweep says, per the "every policy ships in `shadow` mode" non-negotiable.
 
+## Per provider (live Tier A shadow run)
+
+From `eval/datasets/live/issue-triage.ledger.jsonl`; see `eval/reports/providers.md` for method, caveats and threshold recommendations. Grouped by the provider that answered.
+
+| provider/model | answered | availability | agreement w/ primary (questions / verdict) | accuracy | ECE (10 bins) | p50 latency | cost / 1k decisions | recommended confidenceMin / marginMin |
+|---|---|---|---|---|---|---|---|---|
+| `typesafe/jev-1.13.0` | 55/55 | 100.0% | primary | 43.6% | 0.200 | 155 ms | $0.856 | none: shadow only |
+| `typesafe-114/jev-1.14.0` | 55/55 | 100.0% | 81.2% / 83.6% | 43.6% | 0.163 | 151 ms | $0.856 | none: shadow only |
+| `cf-clef/clef` | 55/55 | 100.0% | 69.8% / 81.8% | 38.2% | 0.087 | 329 ms | $0.260 | none: shadow only |
+| `cf-clef-flash/clef-flash` | 55/55 | 100.0% | 66.5% / 65.5% | 40.0% | 0.271 | 135 ms | $0.041 | none: shadow only |
+| `openai/gpt-6-luna` | 55/55 | 100.0% | 70.9% / 67.3% | 43.6% | 0.293 | 196 ms | $0.130 | none: shadow only |
+
 ## Real-issue rows (separate from the synthetic dataset above)
 
 **Dataset**: `eval/datasets/issue-triage-real.jsonl` (24 rows, built from this

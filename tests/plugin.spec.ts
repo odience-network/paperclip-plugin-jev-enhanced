@@ -8,6 +8,7 @@ import type { Issue, IssueComment } from "@paperclipai/shared";
 import manifest from "../src/manifest.js";
 import plugin from "../src/worker.js";
 import { createFakeDb } from "./helpers/fake-db.js";
+import { startMockSystemOneServer } from "./helpers/mock-systemone-server.js";
 import { beginDecision, completeDecision, getDecisionById, getLatestDecision } from "../src/ledger/decisions.js";
 import { getFeedbackSummary, recordFeedback } from "../src/ledger/feedback.js";
 
@@ -662,5 +663,82 @@ describe("plugin scaffold > T5 dashboard data", () => {
     );
     expect(reports.ping?.policy).toBe("ping");
     expect(reports.ping?.metrics.count).toBeGreaterThan(0);
+  });
+});
+
+describe("plugin scaffold > fast-response receipts", () => {
+  /** A harness whose only provider is the in-process mock SystemOne server,
+   * with real `fetch` so every provider call lands in `server.requests`. */
+  async function harnessAgainst(baseUrl: string, comments: IssueComment[]) {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: [...manifest.capabilities, "events.emit"],
+      config: {
+        providers: { mock: { kind: "systemone", preset: "typesafe", baseUrl, authStyle: "none", model: "mock-model" } },
+        defaultProvider: "mock",
+      },
+    });
+    harness.ctx.http.fetch = ((url: string, init?: RequestInit) => fetch(url, init)) as typeof harness.ctx.http.fetch;
+    harness.seed({ issues: [fakeIssue({ assigneeAgentId: "agent_1" })], issueComments: comments });
+    await plugin.definition.setup(harness.ctx);
+    return harness;
+  }
+
+  const receipt = fakeComment({
+    id: "comment_receipt",
+    authorType: "agent",
+    authorAgentId: "agent_1",
+    authorUserId: null,
+    createdByRunId: "run_1",
+    body: "Got it, looking into this now.",
+    origin: "fast_response",
+  } as Partial<IssueComment>);
+
+  it("issue.comment.created for a receipt never reaches the provider", async () => {
+    const server = await startMockSystemOneServer();
+    try {
+      const harness = await harnessAgainst(server.baseUrl, [receipt]);
+      await harness.emit(
+        "issue.comment.created",
+        { commentId: "comment_receipt" },
+        { entityId: "issue_1", entityType: "issue", companyId: "company_1" },
+      );
+      expect(server.requests).toHaveLength(0);
+      expect(harness.dbQueries.filter((q) => q.sql.includes("INSERT INTO"))).toHaveLength(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("issue.comment.created for an ordinary agent comment still reaches the provider", async () => {
+    const server = await startMockSystemOneServer();
+    try {
+      const comment = fakeComment({ id: "comment_agent", authorType: "agent", authorAgentId: "agent_1", authorUserId: null });
+      const harness = await harnessAgainst(server.baseUrl, [comment]);
+      await harness.emit(
+        "issue.comment.created",
+        { commentId: "comment_agent" },
+        { entityId: "issue_1", entityType: "issue", companyId: "company_1" },
+      );
+      expect(server.requests.filter((r) => r.method === "POST")).toHaveLength(1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("run-outcome-qa never treats a receipt as the run's final comment", async () => {
+    const server = await startMockSystemOneServer();
+    try {
+      const harness = await harnessAgainst(server.baseUrl, [receipt]);
+      await harness.emit(
+        "agent.run.finished",
+        { runId: "run_1", agentId: "agent_1", status: "succeeded", issueId: "issue_1" },
+        { entityId: "run_1", entityType: "heartbeat_run", companyId: "company_1" },
+      );
+      expect(server.requests.filter((r) => r.method === "POST")).toHaveLength(1);
+      expect(JSON.stringify(server.requests[0].body)).not.toContain("Got it, looking into this now.");
+    } finally {
+      await server.close();
+    }
   });
 });

@@ -1,0 +1,85 @@
+{
+  "source": "recorded",
+  "recordedAt": "2026-11-11",
+  "provider": "cloudflare",
+  "model": "clef",
+  "name": "decide-mixed-clef",
+  "request": {
+    "method": "POST",
+    "path": "/client/v4/accounts/<account-id>/ai/run/@cf/cloudflare/clef",
+    "body": {
+      "model": "clef",
+      "state": "<state>",
+      "questions": {
+        "is_bug": {
+          "type": "noul",
+          "instructions": "Is this a bug report?"
+        },
+        "area": {
+          "type": "choice",
+          "instructions": "Which area is affected?",
+          "criteria": {
+            "frontend": "UI",
+            "backend": "Server or API",
+            "docs": null
+          }
+        },
+        "severity": {
+          "type": "score",
+          "instructions": "How severe is this?",
+          "criteria": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "result": {
+        "model": "clef",
+        "answers": {
+          "is_bug": {
+            "type": "noul",
+            "noul": 0.9857
+          },
+          "area": {
+            "type": "choice",
+            "choice": "backend",
+            "probabilities": {
+              "frontend": 0.1728,
+              "backend": 0.819,
+              "docs": 0.0082
+            },
+            "confidence": 0.5511
+          },
+          "severity": {
+            "type": "score",
+            "score": 1.7608,
+            "legend": {
+              "0": "low",
+              "1": "medium",
+              "2": "high"
+            },
+            "probabilities": {
+              "0": 0.0566,
+              "1": 0.1261,
+              "2": 0.8173
+            },
+            "confidence": 0.5307
+          }
+        },
+        "usage": {
+          "input_tokens": 325,
+          "output_tokens": 0
+        }
+      },
+      "success": true,
+      "errors": [],
+      "messages": []
+    }
+  }
+}

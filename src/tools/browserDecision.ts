@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { answeredByFields, type DecisionPipeline } from "../decision/pipeline.js";
 import { providerBinding } from "../decision/registry.js";
-import { classifyError } from "../decision/errors.js";
+import { classifyError, errorClassOf } from "../decision/errors.js";
 import { canonicalize, sha256Hex } from "../decision/canonical.js";
 import { beginDecision, completeDecision, type DecisionOutcome, type LedgerDb } from "../ledger/index.js";
 import { policyConfigFor, type VerdictConfig } from "../config.js";
@@ -398,6 +398,7 @@ export async function decideBrowserAction(
       costUsd: 0,
       outcome: "error",
       reason: classifyError(error),
+      errorClass: errorClassOf(error),
     });
     throw error;
   }

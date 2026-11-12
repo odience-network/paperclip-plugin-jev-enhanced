@@ -30,7 +30,8 @@ src/
                       and `estimateCostUsd()` (returns a `rateVersion`).
     pipeline.ts        `DecisionPipeline`: the provider-agnostic ask
                       pipeline (see "Decision pipeline" below). Runs a
-                      `[primary, ...fallbacks]` chain.
+                      `[primary, ...fallbacks]` chain; `askShadow` asks one
+                      shadow provider alone, never with a fallback.
     registry.ts        Builds providers from the `providers` config map;
                       resolves `defaultProvider`, per-policy `provider`,
                       `fallbackProviders`, `shadowProviders`; reads the
@@ -38,6 +39,13 @@ src/
                       implicit `typesafe` provider; `validateProviderConfig`
                       for `onValidateConfig`; `providerBinding` for
                       threshold/mode resolution.
+    thresholds.ts      Built-in per-`(policy, provider, model)` thresholds
+                      from the G5 eval (`eval/reports/providers.json`),
+                      keyed `<preset or kind>/<model>`; `null` and every
+                      Tier B preset mean shadow-only. On a non-baseline
+                      provider they beat the policy-wide numbers (calibrated
+                      on the baseline); an `<alias>/<model>` override beats
+                      both.
     providers/
       systemone.ts     Generic SystemOne HTTP adapter (baseUrl, optional path,
                       auth header style, secret ref). The only caller of
@@ -56,6 +64,20 @@ src/
                       provider-reported cost, which the pipeline uses
                       instead of a rate card. A `refusal` answer from any
                       preset fails the decision.
+      cloudflare.ts    Workers AI adapter for Clef / Clef Flash
+                      (`/accounts/{accountId}/ai/run/@cf/cloudflare/{model}`):
+                      SystemOne body, Cloudflare envelope unwrapped. 64
+                      questions, 26 options, context-derived byte caps.
+      openai.ts        OpenAI Decisions adapter (`/v1/decisions`). Translates
+                      boolean <-> predicate (criteria folded into the
+                      instructions), choice maps <-> `choices[]`, score
+                      criteria <-> index-labelled `levels`; rescales its
+                      two-decimal probabilities; a `refusal` answer throws
+                      `DecisionRefusalError`. Questions keep the policy's
+                      order: the model is order sensitive.
+      http.ts          JSON client for the two adapters above: per-attempt
+                      timeout, bounded retries on 408/429/5xx with
+                      `Retry-After`, errors carry the status only.
       core.ts          Feature-detects a plugin-facing `ctx.decisions.decide`
                       on the host. Absent on every released core, so
                       `availability()` is `{ok: false, reason: "unavailable
@@ -64,7 +86,9 @@ src/
     rates.ts           Per-provider, per-model rate cards with a version
                       string recorded in the ledger's `rate_version`.
     canonical.ts       Deterministic state canonicalization + SHA-256 hashing.
-    redact.ts          Pattern-based redaction and head/tail truncation.
+    redact.ts          Pattern-based redaction (state and question text)
+                      and head/tail truncation.
+    validate.ts        Checks provider answers against the questions sent.
     cache.ts           In-memory cache keyed by (policy, provider, model,
                       stateHash, questionsHash).
     budget.ts          Daily token/cost budget store, backed by `ctx.state`.
@@ -201,6 +225,23 @@ eval/
                       new policies. Regenerate with `tsx
                       eval/report-comment-triage.ts` / `tsx
                       eval/report-run-outcome-qa.ts`.
+  live-run.ts           Live shadow run (developer machines only, never
+                      CI): every dataset case through `runPolicy` with
+                      `typesafe/jev-1.13.0` primary and the other Tier A
+                      providers as shadows; writes
+                      `datasets/live/<policy>.ledger.jsonl`.
+  provider-eval.ts, compare.ts
+                        Per-`provider/model` comparison over a ledger
+                      export, grouped by `decision_group_id`: availability
+                      by error class, agreement with the primary, p50
+                      latency, cost per 1k, and with labels accuracy, ECE
+                      and a threshold recommendation.
+  report-providers.ts   Writes `reports/providers.{md,json}`, the source of
+                      `src/decision/thresholds.ts`.
+  import-training-export.ts
+                        Maps core's `decision-training/export.jsonl` onto
+                      comment-triage and run-outcome-qa eval datasets, text
+                      and ids hashed by default.
 migrations/
   001_verdict_tables.sql    `verdict_decisions` / `verdict_feedback` DDL.
 ```
@@ -224,6 +265,8 @@ Two tables in the plugin's own database namespace (`verdict`, see
   host-billed provider, whose `cost_usd` is also null), and
   `decision_group_id` (joins a primary decision with its shadow-provider
   decisions; set to the row's own id until shadow calls land in G5).
+  `migrations/005_verdict_decision_confidence_source.sql` adds
+  `confidence_source` (see "Derived confidence").
 - **`verdict_feedback`** — human/agent review of a decision: `decision_id`,
   `user_id`/`agent_id`, `verdict` (`accept|override`), `note` (an
   operator-authored review note — not raw issue text).
@@ -254,14 +297,21 @@ can be re-acquired afterward (covered by `tests/ledger.spec.ts`).
 
 1. **Canonicalize** state to a deterministic string (`canonical.ts`).
 2. **Redact** configured patterns (`redactionPatterns`), case-insensitively;
-   an invalid pattern is skipped, not thrown.
+   an invalid pattern is skipped, not thrown. Question text is redacted the
+   same way (names, instructions, criteria, choice option keys, with a `#n`
+   suffix where two keys would collide); answers are mapped back to the
+   original names and keys. `questionsHash` is taken after redaction.
 3. **Truncate** head/tail to `maxStateChars` (default `DEFAULT_MAX_STATE_CHARS`).
 4. **Hash** the result (SHA-256) — this hash, not the text, goes in the
    ledger.
 
 Then, for each provider in the policy's `[primary, ...fallbacks]` chain:
 
-5. **Capability pre-check** against the provider's caps (question types,
+5. **Option capping** for ranked choice questions (`Policy.rankChoices`,
+   e.g. `issue-triage`'s `owner` and `duplicateOf`): trimmed to this
+   provider's `maxChoiceOptions`, keeping pinned sentinels and the
+   best-ranked candidates.
+   **Capability pre-check** against the provider's caps (question types,
    question count, choice options, score levels, request bytes). A miss
    moves on to the next provider without a call; if no provider fits,
    `runPolicy` records `skipped` with a bounded reason code
@@ -276,22 +326,37 @@ Then, for each provider in the policy's `[primary, ...fallbacks]` chain:
    budget is already exhausted.
 8. **Bounded concurrency**: the provider call runs through a semaphore
    (default max 6 concurrent).
-9. **Provider call**: `provider.decide()` under a total wall-clock budget
-   (`AbortSignal.timeout`). For `systemone`, that is `@typesafe-ai/sdk`'s
+9. **Provider call**: `provider.decide()` under the chain's shared
+   wall-clock budget (`totalBudgetMs`, one `AbortSignal.timeout` measured
+   from the start of `ask`, so a fallback only gets what the providers
+   before it left). For `systemone`, that is `@typesafe-ai/sdk`'s
    `TypeSafeClient.systemOne()` with the SDK's own retry/backoff (honoring
    `Retry-After`) and per-attempt timeout, the preset's path and auth
    header, and strict validation against `verdictAskResultSchema` (a model-echo
-   mismatch or malformed answer throws `VerdictValidationError`). Any failure
-   moves on to the next provider; the first real failure is rethrown if all
-   fail.
+   mismatch or malformed answer throws `VerdictValidationError`). A failure
+   moves on to the next provider only when its `ErrorClass` allows it:
+   `transport`, `timeout`, `http_5xx`, `rate_limited`, `unavailable` and
+   `invalid_output` fall back; `refusal`, `auth_config` (incl. a blocked
+   egress), `invalid_request` (other 4xx), `budget_exceeded` and `unknown`
+   stop the chain. The first real failure is rethrown.
 10. **Budget + cost accounting**: usage is added to the daily budget store;
     cost and `rateVersion` come from the provider's rate card (`rates.ts`).
     Host-billed providers record null cost and no rate version.
-11. **Cache write** on success.
+11. **Answer check** (`validateAnswersAgainst`, `src/decision/validate.ts`)
+    against the questions this provider was sent, after capping: every
+    answer is for an asked question and of its type, a choice and its
+    probability keys are offered options, a score lies within its levels.
+    A violation is `VerdictValidationError` (`invalid_output`), so the chain
+    falls back. Provider output is untrusted: without this a provider could
+    name an agent that was never offered and `enforce` mode would apply it.
+12. **Cache write** on success.
 
-The outcome names the provider that answered. `runPolicy`, `guard/evaluate`
-and `verdict:decide-browser-action` record it in the ledger and, if a fallback
-answered, re-resolve thresholds and mode for it.
+The outcome names the provider that answered, the chain head it was meant
+for, and why the chain moved on (`fallbackFrom`). `runPolicy`,
+`guard/evaluate` and `verdict:decide-browser-action` record them in the
+ledger (`provider`, `requested_provider`, `fallback_from`; `error_class` on
+error rows) and, if a fallback answered, re-resolve thresholds and mode for
+it.
 
 Provider keys are obtained only through the registry's `resolveSecret`,
 which `worker.ts` wires to `ctx.secrets.resolve(apiKeyRef)` — never
@@ -303,9 +368,22 @@ which `worker.ts` wires to `ctx.secrets.resolve(apiKeyRef)` — never
 `thresholds` by `"<provider>/<model>"` (an object entry under
 `policies.<name>.thresholds`) with fallback to the policy-wide numbers. The
 mode is held at `shadow` when the provider's capabilities say
-`confidence: "none"`, or when the provider is not the baseline TypeSafe
-preset and has no thresholds of its own: a policy promoted on one provider
-stays observe-only on another until it is calibrated there (G5).
+`confidence: "none"`, or when the provider is not the baseline (TypeSafe on
+the pinned default `jev-1.13.0`) and has no thresholds of its own: a policy
+promoted on one provider stays observe-only on another until it is
+calibrated there (G5). `jev-1.14.0` is allowed but is not the baseline, so
+it runs shadow-only until a `"typesafe/jev-1.14.0"` block exists.
+
+### Derived confidence
+
+A SystemOne-shaped provider (any preset, or `core`) that returns
+`probabilities` for a choice or score answer without a `confidence` gets one
+from `withDerivedConfidence` (`src/decision/confidence.ts`) before
+validation, using the formulas TypeSafe and Perplexity both document:
+choice `(p − 1/n) / (1 − 1/n)`; score `max(0, 1 − Σ pᵢ·|i − m| / MAD_unif)`
+with `m` the most likely level and `MAD_unif = (1/n)·Σ |i − (n−1)/2|`. The
+ledger records `confidence_source` (`native`, `derived`, or null when no
+answer carries a confidence).
 
 ### Test layers
 
@@ -316,11 +394,20 @@ stays observe-only on another until it is calibrated there (G5).
   redaction, no raw state in the ledger, error mapping, timeout, cost and
   rate version. `core` runs the same contract against a fake host SDK that
   exposes and withholds `ctx.decisions`. Every Tier B preset is a row.
-- **L2 docs-derived fixtures** (`tests/provider-presets.spec.ts`,
+  `tests/provider-contract-tier-a.spec.ts` runs the same assertions
+  against mock Workers AI and OpenAI Decisions servers, plus envelope,
+  translation and refusal mapping.
+- **L2 recorded fixtures** (`tests/fixtures/<provider>/`, replayed by
+  `tests/provider-fixtures.spec.ts` in CI): captured once from TypeSafe,
+  Cloudflare (clef, clef-flash) and OpenAI by `pnpm fixtures:record` and
+  scrubbed (headers dropped; account id, UUIDs, request ids and any state
+  echo replaced; the run aborts if a token survives). The adapter must send
+  the recorded request and parse the recorded reply.
+- **L2 docs-derived fixtures** (Tier B) (`tests/provider-presets.spec.ts`,
   `tests/fixtures/<preset>/`): hand-written from each Tier B provider's
   published docs, marked `"source": "docs"` with the doc URL, replayed
   through the mock server. `fetch` is stubbed so any request to a host other
-  than the loopback mock fails the suite. Recorded Tier A fixtures land in G3.
+  than the loopback mock fails the suite.
 - **L3 live smoke** (`pnpm test:live`, `tests/live/`): ping, `listModels`,
   one boolean, one choice, one score and one refusal per provider whose
   `VERDICT_LIVE_<PROVIDER>_TOKEN` is set in a gitignored local `.env` (see
@@ -332,11 +419,11 @@ Company-scoped, validated by `src/config.ts` (`parseVerdictConfig`):
 
 | Field | Default | Notes |
 |---|---|---|
-| `providers.<id>` | — | `{kind: "systemone", preset, apiKeyRef, model?, baseUrl?, path?, authStyle?}` or `{kind: "core", model?}`. Ids are lowercase letters, digits, dashes |
+| `providers.<id>` | — | `{kind: "systemone", preset, apiKeyRef, model?, baseUrl?, path?, authStyle?}`, `{kind: "cloudflare", accountId, apiKeyRef, model?: "clef" \| "clef-flash", baseUrl?}`, `{kind: "openai", apiKeyRef, model? (gpt-6-luna), baseUrl?}` or `{kind: "core", model?}`. Ids are lowercase letters, digits, dashes. Provider fetches only reach the origins of configured providers. `baseUrl` must be `https:` unless the provider sends no credential (`authStyle: "none"`, no `apiKeyRef`) |
 | `defaultProvider` | `typesafe` (or the first provider) | Used by every policy without its own `provider` |
 | `shadowProviders` | `[]` | Resolved by the registry; called alongside the primary from G5 |
 | `apiKeyRef` | — | Deprecated. With an empty `providers` map, read as `providers.typesafe.apiKeyRef` (warning in `onValidateConfig`) |
-| `model` | `jev-1.13.0` | Deprecated, as above. Aliases resolve to a pinned version (preset `modelAliases`) |
+| `model` | `jev-1.13.0` | Deprecated, as above. `jev-1.13.0` or `jev-1.14.0`; aliases (`jev-latest`, `latest`, `jev-preview`) resolve to the pinned default, never the provider-side alias |
 | `baseUrl` | TypeSafe default | Deprecated, as above |
 | `timeoutMs` | `10000` | Per-attempt timeout |
 | `dailyTokenBudget` | `5,000,000` | Tokens/company/day across all policies |
@@ -397,6 +484,31 @@ responsibilities enforced by convention and code review in `apply/`/`decide()`
 implementations, not by a generic framework guard — each `apply` handler and
 each policy's `decide()` is small and reviewable specifically because of
 this.
+
+### Events > comment origin (fast-response receipts)
+
+Core's *fast responses* (paperclipai/paperclip #15748, off by default) post a
+one-sentence acknowledgement as an ordinary comment attributed to the
+assigned agent whenever a human comments. It carries a server-owned
+`IssueComment.origin = "fast_response"` and is logged as
+`issue.comment_added`, so it reaches the worker as `issue.comment.created`
+like any other agent comment.
+
+Every comment reader in the plugin applies one rule,
+`isFastResponseReceipt()` in `src/policies/util.ts`: a receipt is never
+classified, never fed to a provider, and never treated as a run's own
+claim. `commentOriginOf()` reads the field and maps a missing `origin` (older
+cores) to `"comment"`.
+
+- `comment-triage`: `buildCommentTriageState` copies the origin onto
+  `CommentTriageState.origin`, and `preFilter` returns `false` for a receipt
+  — outcome `skipped`, no provider call, no ledger row, no
+  `comment.classified` event, no wakeup.
+- `run-outcome-qa`: `buildRunOutcomeQaState` drops receipts before picking
+  the run's final comment by `createdByRunId`.
+
+The suggest and apply paths and the UI feeds read only ledger rows, never
+host comments, so a skipped receipt never reaches them.
 
 ### Policies > `issue-triage`
 
@@ -540,8 +652,9 @@ question) always reports as the higher-priority verdict.
 
 `preFilter` skips: comments the plugin itself authored (`isPluginOrigin`);
 re-triage where the computed state hash matches the prior decision's hash;
-and comments authored by `authorType: "system"` (nothing a human or agent
-said, so nothing to triage).
+comments authored by `authorType: "system"` (nothing a human or agent
+said, so nothing to triage); and core's fast-response receipts
+(`origin: "fast_response"`, see "Events > comment origin").
 
 Mode semantics for `wakeupAssignee` once the gate clears:
 - **shadow**: ledger row only, `outcome: "observed"`.
@@ -726,6 +839,34 @@ both of which are torn down with the plugin). The `verdict_decisions`/
 historical data survives a disable/re-enable cycle; a full uninstall drops
 the namespace per the host's normal plugin-uninstall data-retention policy.
 
+## Scope versus core's MCP tool gateway
+
+VerdictGuard (`src/guard/`, `hooks/`) covers harness-native tools (Bash,
+Edit, Write, browser actions driven through them) and the `Stop` event. MCP
+tools belong to Paperclip core's tool gateway, which applies its own risk
+classes, `allow | block | require_approval | rate_limit | trust_rule`
+policies and approval cards. VerdictGuard stays off them at two layers:
+
+- The hook matcher in `hooks/README.md` is `^(?!mcp__).*`.
+- `evaluateGuard` checks `isCoreGovernedTool(toolName)` (`src/guard/pre.ts`)
+  before any rail. For `PreToolUse`/`PostToolUse` on an `mcp__*` tool it
+  returns `allow` with reason `governed-by-core-tool-gateway`, and writes
+  one `rails-only` ledger row with outcome `applied`. It makes no provider
+  call. The `guard-pre`/`guard-post` `preFilter`s also reject these tools.
+
+The verdicts map one to one: `allow` → `allow`, `deny` → `deny` (core's
+`block` policy), `ask` → `require_approval`. The two surfaces differ: `ask`
+is a harness permission prompt, while `require_approval` is a board approval
+card.
+
+If both layers evaluated an MCP call, VerdictGuard could override a core
+trust rule, or add a second prompt next to core's card. The residual risk is
+a capability reachable both ways, e.g. Paperclip API writes via Bash `curl`
+or the Paperclip MCP tool. Each layer sees only its own path, so operators
+should mirror core's destructive-tool policies in the `guard-pre`
+thresholds and `blockedTools` for the native equivalents. `docs/SECURITY.md`
+has the full write-up under the same heading.
+
 ## Security posture
 
 - The TypeSafe API key is only ever read via `ctx.secrets.resolve`, bound to
@@ -734,8 +875,10 @@ the namespace per the host's normal plugin-uninstall data-retention policy.
 - No raw issue state or free text is ever written to `verdict_decisions` or
   `verdict_feedback` — only hashes, structured answers, scores, and usage
   metadata (enforced by `tests/ledger.spec.ts`).
-- `redactionPatterns` strip sensitive substrings from state text before it
-  leaves the plugin, ahead of canonicalization's hash and the provider call.
+- `redactionPatterns` strip sensitive substrings from state and question
+  text before it leaves the plugin, ahead of the hashes and the provider call.
+- A credentialed provider's `baseUrl` must be `https:`; config validation
+  rejects `http:` unless the provider sends no credential.
 - Every policy defaults to `shadow` mode; `apply/` (the only place with side
   effects) is unreachable except in `enforce` mode.
 - `ask`/`classify-task`/`verify`/`rerank` (the `verdict-*` decision tools and

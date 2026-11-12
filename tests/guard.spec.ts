@@ -7,7 +7,7 @@ import { runRails, overrideStampKey, type RailDeps, type InteractionsReader } fr
 import type { LoopGuardState } from "../src/guard/loopGuard.js";
 import { effectiveDecision } from "../src/guard/mode.js";
 import { evaluateGuard, type EvaluateGuardDeps } from "../src/guard/evaluate.js";
-import { guardPrePolicy } from "../src/guard/pre.js";
+import { guardPrePolicy, isCoreGovernedTool } from "../src/guard/pre.js";
 import { guardPostPolicy } from "../src/guard/post.js";
 import { guardStopPolicy } from "../src/guard/stop.js";
 import type { GuardEvaluateRequest } from "../src/guard/types.js";
@@ -475,6 +475,24 @@ describe("guardStopPolicy.decide", () => {
   });
 });
 
+describe("core-governed (MCP) tool scope", () => {
+  it("isCoreGovernedTool matches only Claude Code's mcp__ prefix", () => {
+    expect(isCoreGovernedTool("mcp__paperclip__create_issue")).toBe(true);
+    expect(isCoreGovernedTool("Bash")).toBe(false);
+    expect(isCoreGovernedTool("Write")).toBe(false);
+    expect(isCoreGovernedTool("my_mcp__tool")).toBe(false);
+    expect(isCoreGovernedTool(undefined)).toBe(false);
+  });
+
+  it("guard-pre and guard-post preFilters skip MCP tools", () => {
+    const ctx = { companyId: "company_1", config: { enabled: true, mode: "shadow" as const, thresholds: {}, alwaysAuto: false, options: {} } };
+    expect(guardPrePolicy.preFilter({ toolName: "mcp__browser__click" }, ctx)).toBe(false);
+    expect(guardPrePolicy.preFilter({ toolName: "Bash" }, ctx)).toBe(true);
+    expect(guardPostPolicy.preFilter({ toolName: "mcp__browser__click", excerpt: "" }, ctx)).toBe(false);
+    expect(guardPostPolicy.preFilter({ toolName: "Bash", excerpt: "" }, ctx)).toBe(true);
+  });
+});
+
 describe("evaluateGuard", () => {
   function deps(overrides: Partial<EvaluateGuardDeps> = {}, fetchImpl?: Fetch): EvaluateGuardDeps {
     const client = createTypesafePipeline({
@@ -709,5 +727,55 @@ describe("evaluateGuard", () => {
     expect(result.decision).toBe("allow");
     expect(result.reason).toBe("policy-disabled");
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  for (const hookKind of ["PreToolUse", "PostToolUse"] as const) {
+    it(`${hookKind} on an MCP tool allows with governed-by-core-tool-gateway, no provider call, one rails-only row`, async () => {
+      const fetchImpl = vi.fn<Fetch>(async () => jsonResponse({}));
+      const d = deps(
+        {
+          config: baseConfig({
+            policies: {
+              "guard-pre": { enabled: true, mode: "enforce", thresholds: {}, alwaysAuto: false, options: {} },
+              "guard-post": { enabled: true, mode: "enforce", thresholds: {}, alwaysAuto: false, options: {} },
+            },
+          }),
+        },
+        fetchImpl,
+      );
+      const execute = vi.spyOn(d.db, "execute");
+      const result = await evaluateGuard(baseRequest({ hookKind, toolName: "mcp__paperclip__update_issue", excerpt: "x" }), d);
+      expect(result).toMatchObject({ decision: "allow", intendedDecision: "allow", reason: "governed-by-core-tool-gateway", rail: true });
+      expect(fetchImpl).not.toHaveBeenCalled();
+      const rows = [...(d.db as ReturnType<typeof createFakeDb>).rows.values()];
+      expect(rows).toEqual([expect.objectContaining({ outcome: "applied", reason: "governed-by-core-tool-gateway" })]);
+      const insert = execute.mock.calls.find(([sql]) => sql.includes("INSERT INTO"));
+      expect(insert?.[1]).toContain("rails-only");
+    });
+  }
+
+  it("the MCP scope boundary runs before the kill switch, blocklist and loop guard", async () => {
+    const fetchImpl = vi.fn<Fetch>(async () => jsonResponse({}));
+    const d = deps(
+      {
+        config: baseConfig({
+          guardRails: { killSwitch: "deny-all", blockedTools: ["mcp__browser__navigate"] } as never,
+          policies: { "guard-pre": { enabled: true, mode: "enforce", thresholds: {}, alwaysAuto: false, options: {} } },
+        }),
+      },
+      fetchImpl,
+    );
+    const result = await evaluateGuard(baseRequest({ toolName: "mcp__browser__navigate", toolInputHash: "h1" }), d);
+    expect(result.decision).toBe("allow");
+    expect(result.reason).toBe("governed-by-core-tool-gateway");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("native tools still reach the provider", async () => {
+    const fetchImpl = vi.fn<Fetch>(async () => jsonResponse({}));
+    const d = deps({}, fetchImpl);
+    const result = await evaluateGuard(baseRequest({ toolName: "Bash", excerpt: "ls" }), d);
+    expect(result.reason).not.toBe("governed-by-core-tool-gateway");
+    expect(fetchImpl).toHaveBeenCalled();
   });
 });

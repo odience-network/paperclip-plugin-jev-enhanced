@@ -9,7 +9,7 @@ import { SYSTEMONE_PRESETS } from "../src/decision/providers/presets.js";
 import { buildProvider, providerBinding, validateProviderConfig } from "../src/decision/registry.js";
 import type { DecisionQuestions } from "../src/decision/types.js";
 import manifest from "../src/manifest.js";
-import { startMockSystemOneServer, type MockSystemOneServer } from "./helpers/mock-systemone-server.js";
+import { plainHttpFetch, startMockSystemOneServer, type MockSystemOneServer } from "./helpers/mock-systemone-server.js";
 
 /**
  * L2 docs-derived fixtures (plan 2.3b) for the Tier B presets. No account
@@ -67,12 +67,13 @@ beforeEach(() => {
 
 function providerFor(preset: string, extra: Record<string, unknown> = {}): DecisionProvider {
   const config = parseVerdictConfig({
-    providers: { subject: { kind: "systemone", preset, apiKeyRef: "ref", baseUrl: server.baseUrl, ...extra } },
+    providers: { subject: { kind: "systemone", preset, apiKeyRef: "ref", baseUrl: server.secureBaseUrl, ...extra } },
   });
   return buildProvider("subject", config.providers.subject, {
     resolveSecret: async () => "sk-fixture-test",
     timeoutMs: 2_000,
     retry: { maxRetries: 0, backoffInitialMs: 1, backoffMaxMs: 1 },
+    fetchImpl: plainHttpFetch,
   });
 }
 
@@ -109,7 +110,8 @@ describe("Tier B presets: registry and config", () => {
         subject: {
           kind: "systemone",
           preset: name,
-          apiKeyRef: "ref",
+          // A credential needs https:, which the self-hosted defaults are not.
+          ...(preset.authStyle === "none" ? {} : { apiKeyRef: "ref" }),
           ...(preset.defaultModel ? {} : { model: "typesafe/jev-1.13" }),
           ...(preset.baseUrl ? {} : { baseUrl: "http://laya.internal:8000" }),
         },
@@ -124,7 +126,7 @@ describe("Tier B presets: registry and config", () => {
         throw new Error("captured");
       },
     });
-    await provider.decide({ state: "s", questions: { q: { type: "boolean" } }, model: provider.model }, { signal: AbortSignal.timeout(1_000) }).catch(() => {});
+    await provider.decide({ state: "s", questions: { q: { type: "boolean", instructions: "q?" } }, model: provider.model }, { signal: AbortSignal.timeout(1_000) }).catch(() => {});
     expect(urls).toEqual([`${preset.baseUrl || "http://laya.internal:8000"}${preset.path}`]);
   });
 

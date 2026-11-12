@@ -1,0 +1,29 @@
+{
+  "source": "recorded",
+  "recordedAt": "2026-11-11",
+  "provider": "typesafe",
+  "model": "jev-1.13.0",
+  "name": "models",
+  "request": {
+    "method": "GET",
+    "path": "/v1/models",
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "models": [
+        {
+          "name": "jev-latest",
+          "description": "The latest iteration of TypeSafe's System One Model: Jev",
+          "release_date": "2026-10-22T02:00:00+00:00"
+        },
+        {
+          "name": "jev-preview",
+          "description": "Preview the next version of Jev before it gets promoted to jev-latest. Most of the time this is the same as jev-latest",
+          "release_date": "2026-10-14T20:14:00+00:00"
+        }
+      ]
+    }
+  }
+}

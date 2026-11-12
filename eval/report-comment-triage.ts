@@ -11,8 +11,9 @@ import { fileURLToPath } from "node:url";
 import { commentTriagePolicy, type CommentTriageState } from "../src/policies/comment-triage.js";
 import { confidenceMarginFor } from "../src/policies/issue-triage.js";
 import type { Policy, PolicyContext } from "../src/policies/types.js";
-import { loadJsonlDataset } from "./dataset.js";
+import { loadJsonlDataset, providerModelOfCase } from "./dataset.js";
 import { summarize } from "./metrics.js";
+import { liveProviderSection } from "./provider-eval.js";
 import type { EvalCase, EvalResult } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -37,6 +38,7 @@ function decideAll(
       correct: verdict.verdict === evalCase.expectedVerdict,
       latencyMs: evalCase.latencyMs,
       costUsd: evalCase.costUsd,
+      providerModel: providerModelOfCase(evalCase),
     };
   });
 }
@@ -208,7 +210,13 @@ function main() {
   const questionStats = perQuestionStats(cases);
   const recommendation = recommendThresholds(sweep);
 
-  const markdown = toMarkdown({ datasetSize: cases.length, metrics, sweep, questionStats, recommendation });
+  const liveSection = liveProviderSection(
+    commentTriagePolicy as Policy,
+    cases,
+    join(__dirname, "datasets", "live", "comment-triage.ledger.jsonl"),
+    DEFAULT_THRESHOLDS,
+  );
+  const markdown = toMarkdown({ datasetSize: cases.length, metrics, sweep, questionStats, recommendation }) + liveSection;
 
   const outPath = join(__dirname, "reports", "comment-triage.md");
   mkdirSync(dirname(outPath), { recursive: true });

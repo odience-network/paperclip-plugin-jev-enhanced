@@ -97,3 +97,15 @@ confidence/margin distribution, not evidence the same point is optimal in produc
 Re-sweep against the real ledger once `shadow` mode has accumulated decisions on live
 comments, and keep `enforce` mode gated behind a manual promotion decision regardless of
 what the sweep says, per the "every policy ships in `shadow` mode" non-negotiable.
+
+## Per provider (live Tier A shadow run)
+
+From `eval/datasets/live/comment-triage.ledger.jsonl`; see `eval/reports/providers.md` for method, caveats and threshold recommendations. Grouped by the provider that answered.
+
+| provider/model | answered | availability | agreement w/ primary (questions / verdict) | accuracy | ECE (10 bins) | p50 latency | cost / 1k decisions | recommended confidenceMin / marginMin |
+|---|---|---|---|---|---|---|---|---|
+| `typesafe/jev-1.13.0` | 52/52 | 100.0% | primary | 78.8% | 0.115 | 152 ms | $0.412 | 0.95 / 0.3 (covers 48.1% at 96.0%) |
+| `typesafe-114/jev-1.14.0` | 52/52 | 100.0% | 81.2% / 100.0% | 78.8% | 0.108 | 153 ms | $0.412 | 0.95 / 0.3 (covers 36.5% at 100.0%) |
+| `cf-clef/clef` | 52/52 | 100.0% | 76.5% / 80.8% | 96.2% | 0.026 | 341 ms | $0.154 | 0.75 / 0.3 (covers 100.0% at 96.2%) |
+| `cf-clef-flash/clef-flash` | 52/52 | 100.0% | 76.5% / 94.2% | 75.0% | 0.250 | 118 ms | $0.024 | none: shadow only |
+| `openai/gpt-6-luna` | 52/52 | 100.0% | 77.7% / 82.7% | 86.5% | 0.147 | 180 ms | $0.088 | 0.95 / 0.3 (covers 61.5% at 93.8%) |

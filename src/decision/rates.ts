@@ -26,6 +26,18 @@ export const RATE_CARDS: Record<string, RateCard> = {
     models: { [DEFAULT_TYPESAFE_MODEL]: { input: 0.5, output: 1.5 } },
     default: { input: 0.5, output: 1.5 },
   },
+  // Workers AI model catalog (`GET /ai/models/search`) as of 2026-11-11.
+  // Decision models bill input only; responses report 0 output tokens.
+  cloudflare: {
+    version: "cloudflare-2026-11-11",
+    models: { clef: { input: 0.24, output: 0 }, "clef-flash": { input: 0.038, output: 0 } },
+    default: { input: 0.24, output: 0 },
+  },
+  openai: {
+    version: "openai-2026-11-11",
+    models: { "gpt-6-luna": { input: 0.1, output: 0 } },
+    default: { input: 0.1, output: 0 },
+  },
   // Opper's September 2026 list price for Kev 4B: input only, output free.
   kev: {
     version: "kev-opper-2026-09",

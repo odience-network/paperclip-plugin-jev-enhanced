@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { runOutcomeQaPolicy, type RunOutcomeQaState } from "../src/policies/run-outcome-qa.js";
 import { confidenceMarginFor } from "../src/policies/issue-triage.js";
 import type { Policy, PolicyContext } from "../src/policies/types.js";
-import { loadJsonlDataset } from "./dataset.js";
+import { loadJsonlDataset, providerModelOfCase } from "./dataset.js";
 import { summarize } from "./metrics.js";
 import type { EvalCase, EvalResult } from "./types.js";
 
@@ -37,6 +37,7 @@ function decideAll(
       correct: verdict.verdict === evalCase.expectedVerdict,
       latencyMs: evalCase.latencyMs,
       costUsd: evalCase.costUsd,
+      providerModel: providerModelOfCase(evalCase),
     };
   });
 }

@@ -1,5 +1,5 @@
 import { VerdictValidationError } from "../errors.js";
-import { DEFAULT_TYPESAFE_MODEL } from "../models.js";
+import { DEFAULT_TYPESAFE_MODEL, TYPESAFE_MODEL_ALIASES, TYPESAFE_MODELS } from "../models.js";
 import type { CostEstimate, ProviderCapabilities } from "../provider.js";
 
 /** How the API key is sent. `"none"` is for self-hosted servers with no auth. */
@@ -30,7 +30,10 @@ export interface SystemOnePreset {
    * set `model`. */
   defaultModel: string;
   /** Operator-typed aliases resolved to a pinned version before the call. */
-  modelAliases: Record<string, string>;
+  modelAliases: Readonly<Record<string, string>>;
+  /** When set, the only models (after alias resolution) config may name for
+   * this preset's own host; anything else is a validation error. */
+  pinnedModels?: readonly string[];
   capabilities: ProviderCapabilities;
   /** `"fixtures"` (Tier B): built from published docs, never called live. */
   verification: "live" | "fixtures";
@@ -142,11 +145,12 @@ export const SYSTEMONE_PRESETS: Record<string, SystemOnePreset> = {
     modelsPath: "/v1/models",
     authStyle: "bearer",
     defaultModel: DEFAULT_TYPESAFE_MODEL,
-    modelAliases: { "jev-latest": DEFAULT_TYPESAFE_MODEL, latest: DEFAULT_TYPESAFE_MODEL },
+    modelAliases: TYPESAFE_MODEL_ALIASES,
+    pinnedModels: TYPESAFE_MODELS,
     capabilities: REFERENCE_CAPABILITIES,
     verification: "live",
     rateCard: "typesafe",
-    disclosure: "Sends redacted state text to TypeSafe (api.typesafe.ai). Zero data retention on enterprise plans.",
+    disclosure: "Sends redacted state text to TypeSafe (api.typesafe.ai). Zero data retention on enterprise plans only; other plans may retain requests.",
     docsUrl: "https://docs.typesafe.ai/api.md",
   },
   perplexity: {
