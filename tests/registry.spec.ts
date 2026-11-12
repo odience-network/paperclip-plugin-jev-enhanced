@@ -8,10 +8,19 @@ import {
   defaultProviderId,
   effectiveProviders,
   providerBinding,
+  providerDisclosure,
   resolvePolicyProviderIds,
   validateProviderConfig,
 } from "../src/decision/registry.js";
 import { CoreProvider } from "../src/decision/providers/core.js";
+import {
+  DecisionRefusalError,
+  errorClassOf,
+  MissingApiKeyError,
+  ProviderConnectionError,
+  ProviderHttpError,
+  VerdictValidationError,
+} from "../src/decision/errors.js";
 import { SystemOneProvider } from "../src/decision/providers/systemone.js";
 import { runPolicy } from "../src/policies/run.js";
 import { pingPolicy } from "../src/policies/ping.js";
@@ -157,6 +166,65 @@ describe("registry: resolution", () => {
   });
 });
 
+describe("registry: cleartext credentials and disclosures (ODIAA-2473 F3)", () => {
+  const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
+
+  it.each([
+    ["systemone with a key", { kind: "systemone", preset: "typesafe", apiKeyRef: "ref", baseUrl: "http://proxy.example.com" }],
+    ["systemone on the preset's bearer auth", { kind: "systemone", preset: "typesafe", baseUrl: "http://proxy.example.com" }],
+    ["systemone x-api-key", { kind: "systemone", preset: "typesafe", authStyle: "x-api-key", baseUrl: "http://proxy.example.com" }],
+    ["systemone none, but a key bound", { kind: "systemone", preset: "typesafe", authStyle: "none", apiKeyRef: "ref", baseUrl: "http://proxy.example.com" }],
+    ["cloudflare", { kind: "cloudflare", accountId: ACCOUNT_ID, apiKeyRef: "ref", baseUrl: "http://gateway.example.com" }],
+    ["openai", { kind: "openai", apiKeyRef: "ref", baseUrl: "http://proxy.example.com/v1" }],
+  ])("rejects an http: baseUrl for a provider that sends a credential: %s", (_name, provider) => {
+    expect(() => parseVerdictConfig({ providers: { subject: provider } })).toThrow(/baseUrl must be https:/);
+  });
+
+  it("rejects an http: legacy top-level baseUrl, which is read as the bearer typesafe provider", () => {
+    expect(() => parseVerdictConfig({ apiKeyRef: "ref", baseUrl: "http://proxy.example.com" })).toThrow(/baseUrl must be https:/);
+  });
+
+  it("allows http: only for an unauthenticated provider, and https: for any", () => {
+    const config = parseVerdictConfig({
+      providers: {
+        local: { kind: "systemone", preset: "typesafe", authStyle: "none", baseUrl: "http://decider.example.com" },
+        proxied: { kind: "openai", apiKeyRef: "ref", baseUrl: "https://proxy.example.com/v1" },
+      },
+    });
+    expect(Object.keys(config.providers)).toEqual(["local", "proxied"]);
+  });
+
+  it("keeps the known host's disclosure when baseUrl stays on it", () => {
+    const config = parseVerdictConfig({
+      providers: {
+        ts: { kind: "systemone", preset: "typesafe", apiKeyRef: "ref", baseUrl: "https://api.typesafe.ai/" },
+        oa: { kind: "openai", apiKeyRef: "ref", baseUrl: "https://api.openai.com/v1" },
+      },
+    });
+    expect(providerDisclosure(config.providers.ts)).toMatch(/^Sends redacted state text to TypeSafe/);
+    expect(providerDisclosure(config.providers.oa)).toMatch(/^Sends redacted state text to OpenAI .*30 days/);
+  });
+
+  it("names the custom origin, with unknown retention, when baseUrl moves a provider off its known host", () => {
+    const config = parseVerdictConfig({
+      providers: {
+        ts: { kind: "systemone", preset: "typesafe", apiKeyRef: "ref", baseUrl: "https://proxy.example.com/typesafe" },
+        cf: { kind: "cloudflare", accountId: ACCOUNT_ID, apiKeyRef: "ref", baseUrl: "https://gateway.example.net/v1/acct/gw" },
+        oa: { kind: "openai", apiKeyRef: "ref", baseUrl: "https://llm.example.org:8443/v1" },
+      },
+    });
+    expect(providerDisclosure(config.providers.ts)).toBe(
+      "Sends redacted state text to https://proxy.example.com (custom base URL; retention unknown).",
+    );
+    expect(providerDisclosure(config.providers.cf)).toBe(
+      "Sends redacted state text to https://gateway.example.net (custom base URL; retention unknown).",
+    );
+    expect(providerDisclosure(config.providers.oa)).toBe(
+      "Sends redacted state text to https://llm.example.org:8443 (custom base URL; retention unknown).",
+    );
+  });
+});
+
 describe("policyConfigFor: provider-bound thresholds and mode", () => {
   const config = parseVerdictConfig({
     policies: {
@@ -207,8 +275,8 @@ describe("policyConfigFor: provider-bound thresholds and mode", () => {
 });
 
 describe("pipeline: fallback chain and cache", () => {
-  it("falls back to the next provider on failure and reports who answered", async () => {
-    const primary = scriptedProvider("primary", { fail: new Error("boom") });
+  it("falls back to the next provider on an outage and reports who was asked, who answered and why", async () => {
+    const primary = scriptedProvider("primary", { fail: new ProviderConnectionError("primary") });
     const fallback = scriptedProvider("fallback");
     const pipeline = new DecisionPipeline({ providers: [primary, fallback] });
 
@@ -216,15 +284,97 @@ describe("pipeline: fallback chain and cache", () => {
 
     expect(primary.decide).toHaveBeenCalledTimes(1);
     expect(outcome.provider).toBe(fallback);
+    expect(outcome.requestedProvider).toBe(primary);
+    expect(outcome.fallbackFrom).toBe("transport");
     expect(outcome.rateVersion).toBe("fallback-rates-v1");
+  });
+
+  it.each([
+    { error: new ProviderHttpError("p", 503), errorClass: "http_5xx" },
+    { error: new ProviderHttpError("p", 429), errorClass: "rate_limited" },
+    { error: new VerdictValidationError("bad body"), errorClass: "invalid_output" },
+  ])("falls back on $errorClass", async ({ error, errorClass }) => {
+    const primary = scriptedProvider("primary", { fail: error });
+    const fallback = scriptedProvider("fallback");
+
+    const outcome = await new DecisionPipeline({ providers: [primary, fallback] }).ask({
+      policy: "ping",
+      companyId: "c1",
+      state: "s",
+      questions: { pong: { type: "boolean" } },
+    });
+
+    expect(outcome.provider).toBe(fallback);
+    expect(outcome.fallbackFrom).toBe(errorClass);
+  });
+
+  it.each([
+    { error: new DecisionRefusalError("p", ["pong"]), errorClass: "refusal" },
+    { error: new ProviderHttpError("p", 401), errorClass: "auth_config" },
+    { error: new MissingApiKeyError(), errorClass: "auth_config" },
+    { error: new ProviderHttpError("p", 422), errorClass: "invalid_request" },
+    { error: new Error("bug"), errorClass: "unknown" },
+  ])("does not fall back on $errorClass", async ({ error, errorClass }) => {
+    const primary = scriptedProvider("primary", { fail: error });
+    const fallback = scriptedProvider("fallback");
+
+    const thrown = await new DecisionPipeline({ providers: [primary, fallback] })
+      .ask({ policy: "ping", companyId: "c1", state: "s", questions: { pong: { type: "boolean" } } })
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBe(error);
+    expect(errorClassOf(thrown)).toBe(errorClass);
+    expect(fallback.decide).not.toHaveBeenCalled();
+  });
+
+  it("shares one time budget across the whole chain instead of one per provider", async () => {
+    const hang = (id: string, failAfterMs?: number) => {
+      const provider = scriptedProvider(id);
+      provider.decide.mockImplementation(
+        (_req: unknown, opts: { signal: AbortSignal }) =>
+          new Promise((_, reject) => {
+            if (failAfterMs !== undefined) setTimeout(() => reject(new ProviderConnectionError(id)), failAfterMs);
+            opts.signal.addEventListener("abort", () => reject(opts.signal.reason), { once: true });
+          }),
+      );
+      return provider;
+    };
+    const first = hang("first", 40);
+    const second = hang("second");
+    const third = hang("third");
+
+    const started = Date.now();
+    const thrown = await new DecisionPipeline({ providers: [first, second, third], totalBudgetMs: 120 })
+      .ask({ policy: "ping", companyId: "c1", state: "s", questions: { pong: { type: "boolean" } } })
+      .catch((e: unknown) => e);
+    const elapsed = Date.now() - started;
+
+    // The second provider only got what the first left, and the third none.
+    expect(elapsed).toBeGreaterThanOrEqual(110);
+    expect(elapsed).toBeLessThan(220);
+    expect(second.decide).toHaveBeenCalledTimes(1);
+    expect(third.decide).not.toHaveBeenCalled();
+    expect(errorClassOf(thrown)).toBe("transport");
+  });
+
+  it("records a capability skip as the reason a fallback answered", async () => {
+    const small = scriptedProvider("small", { caps: { maxQuestions: 0 } });
+    const fallback = scriptedProvider("fallback");
+    const outcome = await new DecisionPipeline({ providers: [small, fallback] }).ask({
+      policy: "ping",
+      companyId: "c1",
+      state: "s",
+      questions: { pong: { type: "boolean" } },
+    });
+    expect(outcome.fallbackFrom).toBe("capability-max-questions");
   });
 
   it("skips a provider whose caps don't fit and surfaces the first real failure over a capability skip", async () => {
     const small = scriptedProvider("small", { caps: { maxQuestions: 0 } });
-    const broken = scriptedProvider("broken", { fail: new Error("boom") });
+    const broken = scriptedProvider("broken", { fail: new ProviderConnectionError("broken") });
     const pipeline = new DecisionPipeline({ providers: [small, broken] });
 
-    await expect(pipeline.ask({ policy: "ping", companyId: "c1", state: "s", questions: { pong: { type: "boolean" } } })).rejects.toThrow("boom");
+    await expect(pipeline.ask({ policy: "ping", companyId: "c1", state: "s", questions: { pong: { type: "boolean" } } })).rejects.toBeInstanceOf(ProviderConnectionError);
     expect(small.decide).not.toHaveBeenCalled();
   });
 
@@ -251,7 +401,7 @@ describe("runPolicy with providers", () => {
   it("records the answering fallback in the ledger and holds an uncalibrated fallback in shadow", async () => {
     const db = createFakeDb();
     const suggestLog = vi.fn();
-    const primary = scriptedProvider("typesafe", { preset: "typesafe", fail: new Error("down") });
+    const primary = scriptedProvider("typesafe", { preset: "typesafe", fail: new ProviderHttpError("typesafe", 503) });
     const fallback = scriptedProvider("local");
     const result = await runPolicy(
       { policy: pingPolicy, state: { message: "ping" }, config: suggestConfig, companyId: "c1", issueId: "i1" },
@@ -263,6 +413,9 @@ describe("runPolicy with providers", () => {
     const row = await getDecisionById(db, "c1", (result as { decisionId: string }).decisionId);
     expect(row).toMatchObject({
       provider: "local",
+      requestedProvider: "typesafe",
+      fallbackFrom: "http_5xx",
+      errorClass: null,
       providerKind: "systemone",
       model: "local-model",
       mode: "shadow",
@@ -270,6 +423,22 @@ describe("runPolicy with providers", () => {
       outcome: "observed",
     });
     expect(row?.decisionGroupId).toBe(row?.id);
+  });
+
+  it("records the error class on an error row", async () => {
+    const db = createFakeDb();
+    const primary = scriptedProvider("typesafe", { preset: "typesafe", fail: new ProviderHttpError("typesafe", 401) });
+    const fallback = scriptedProvider("local");
+    await expect(
+      runPolicy(
+        { policy: pingPolicy, state: { message: "ping" }, config: suggestConfig, companyId: "c1", issueId: "i1" },
+        { client: new DecisionPipeline({ providers: [primary, fallback] }), db, apply: { log: vi.fn() }, suggest: { log: vi.fn() } },
+      ),
+    ).rejects.toBeInstanceOf(ProviderHttpError);
+
+    const row = await getLatestDecision(db, "c1", "i1");
+    expect(row).toMatchObject({ outcome: "error", reason: "auth-failed", errorClass: "auth_config", requestedProvider: "typesafe" });
+    expect(fallback.decide).not.toHaveBeenCalled();
   });
 
   it("keeps the configured mode on the baseline provider", async () => {

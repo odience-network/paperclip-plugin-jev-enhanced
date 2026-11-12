@@ -3,6 +3,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 import { DEFAULT_TYPESAFE_MODEL } from "./decision/models.js";
+import { CLOUDFLARE_DISCLOSURE, OPENAI_DISCLOSURE } from "./decision/providers/disclosures.js";
 
 // Deliberately not `new URL("../skills/...", import.meta.url)`: Vite special-
 // cases that exact literal pattern as a static asset reference and rewrites
@@ -61,8 +62,8 @@ const manifest: PaperclipPluginManifestV1 = {
   instanceConfigSchema: {
     type: "object",
     description:
-      "Verdict sends the issue/state text you route through its policies to the configured decision provider (for example TypeSafe's hosted Jev model) " +
-      "(api.typesafe.ai) over HTTPS to evaluate those policies. No raw issue state or free text is ever stored " +
+      "Verdict sends the issue/state text you route through its policies to the configured decision provider " +
+      "(TypeSafe api.typesafe.ai, Cloudflare api.cloudflare.com, OpenAI api.openai.com, or a self-hosted server) over HTTPS to evaluate those policies. No raw issue state or free text is ever stored " +
       "in the Verdict ledger — only policy outcomes, scores, and usage metadata. Use redactionPatterns to strip " +
       "anything sensitive before it leaves this plugin.",
     properties: {
@@ -93,16 +94,26 @@ const manifest: PaperclipPluginManifestV1 = {
         type: "object",
         title: "Providers",
         description:
-          "Decision providers by alias. Each entry is { kind: \"systemone\", preset, apiKeyRef, model?, baseUrl?, " +
-          "path?, authStyle? } or { kind: \"core\" }. Preset \"typesafe\" sends redacted state text to TypeSafe " +
-          "(api.typesafe.ai; zero data retention on enterprise plans). \"core\" uses the host's own decision " +
-          "service where the host exposes one, holds no credential, and is billed by the host.",
+          "Decision providers by alias. Kinds: " +
+          "{ kind: \"systemone\", preset, apiKeyRef, model?, baseUrl?, path?, authStyle? }: preset \"typesafe\" " +
+          "sends redacted state text to TypeSafe (api.typesafe.ai; zero data retention on enterprise plans only). " +
+          "{ kind: \"cloudflare\", accountId, apiKeyRef, model: \"clef\" | \"clef-flash\" }: " +
+          `${CLOUDFLARE_DISCLOSURE} ` +
+          "{ kind: \"openai\", apiKeyRef, model? (default gpt-6-luna) }: " +
+          `${OPENAI_DISCLOSURE} ` +
+          "{ kind: \"core\" }: uses the host's own decision service where the host exposes one, holds no " +
+          "credential, and is billed by the host. Provider calls can only reach the hosts of configured providers. " +
+          "A baseUrl must be https: unless the provider sends no credential (authStyle \"none\").",
         additionalProperties: {
           type: "object",
           properties: {
-            kind: { type: "string", enum: ["systemone", "core"] },
+            kind: { type: "string", enum: ["systemone", "cloudflare", "openai", "core"] },
             preset: { type: "string", enum: ["typesafe"], default: "typesafe" },
             apiKeyRef: { type: "string", format: "secret-ref" },
+            accountId: {
+              type: "string",
+              description: "cloudflare only: the 32-character Workers AI account id. Configuration, not a secret.",
+            },
             model: { type: "string" },
             baseUrl: { type: "string" },
             path: { type: "string" },

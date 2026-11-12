@@ -3,7 +3,7 @@ import { answeredByFields, type DecisionPipeline } from "../decision/pipeline.js
 import type { LedgerDb } from "../ledger/db.js";
 import { beginDecision, completeDecision, type DecisionOutcome } from "../ledger/decisions.js";
 import { policyConfigFor } from "../config.js";
-import { classifyError } from "../decision/errors.js";
+import { classifyError, errorClassOf } from "../decision/errors.js";
 import type { VerdictAskOutcome } from "../decision/pipeline.js";
 import { providerBinding } from "../decision/registry.js";
 import { CORE_GOVERNED_TOOL_REASON, guardPrePolicy, isCoreGovernedTool, type GuardPreState } from "./pre.js";
@@ -293,6 +293,7 @@ function errorPatch(started: number, error: unknown) {
     costUsd: 0,
     outcome: "error" as const,
     reason: classifyError(error),
+    errorClass: errorClassOf(error),
   };
 }
 

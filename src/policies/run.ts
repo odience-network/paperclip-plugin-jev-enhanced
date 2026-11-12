@@ -1,6 +1,6 @@
 import { answeredByFields, type DecisionPipeline } from "../decision/pipeline.js";
 import type { VerdictAnswer } from "../decision/types.js";
-import { CapabilityError, classifyError } from "../decision/errors.js";
+import { CapabilityError, classifyError, errorClassOf } from "../decision/errors.js";
 import { providerBinding } from "../decision/registry.js";
 import { beginDecision, completeDecision, type DecisionOutcome, type LedgerDb } from "../ledger/index.js";
 import { policyConfigFor, type VerdictConfig, type PolicyMode } from "../config.js";
@@ -108,6 +108,7 @@ export async function runPolicy<TState>(
       companyId: input.companyId,
       state: input.state,
       questions,
+      choiceRanking: input.policy.rankChoices?.(input.state, ctx),
     });
     const answeredBy = askOutcome.provider;
     const answeredConfig =
@@ -156,6 +157,7 @@ export async function runPolicy<TState>(
       costUsd: 0,
       outcome: skipped ? "skipped" : "error",
       reason: classifyError(error),
+      errorClass: skipped ? null : errorClassOf(error),
     });
     if (skipped) return { outcome: "skipped", reason: error.reason };
     throw error;

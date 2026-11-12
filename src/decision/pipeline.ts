@@ -1,17 +1,20 @@
 import { canonicalize, sha256Hex } from "./canonical.js";
-import { redactText, truncateHeadTail, DEFAULT_MAX_STATE_CHARS } from "./redact.js";
+import { redactQuestions, redactText, truncateHeadTail, DEFAULT_MAX_STATE_CHARS, type RedactedQuestions } from "./redact.js";
 import { cacheKeyFor, type VerdictCache } from "./cache.js";
 import { BudgetExceededError, utcDateKey, type BudgetStore } from "./budget.js";
 import { Semaphore } from "./semaphore.js";
-import { CapabilityError, type CapabilityReason } from "./errors.js";
+import { CapabilityError, errorClassOf, shouldFallBack, type CapabilityReason, type ErrorClass } from "./errors.js";
 import type { DecisionProvider, ModelCard, ProviderKind } from "./provider.js";
 import { canonicalQuestionType, type DecisionQuestions, type DecisionResult } from "./types.js";
+import { validateAnswersAgainst } from "./validate.js";
 
 export interface DecisionPipelineOptions {
   /** `[primary, ...fallbacks]`, tried in order. At least one. */
   providers: readonly DecisionProvider[];
-  /** Total wall-clock budget for one provider call across all its retries, in
-   * milliseconds (the SDK only bounds each individual attempt). */
+  /** Total wall-clock budget for one `ask`, in milliseconds: shared by every
+   * provider in the chain and all their retries (the adapters only bound each
+   * individual attempt). A fallback gets whatever the providers before it left;
+   * once it is spent no further provider is tried. */
   totalBudgetMs?: number;
   maxConcurrency?: number;
   dailyTokenBudget?: number;
@@ -22,11 +25,53 @@ export interface DecisionPipelineOptions {
   now?: () => Date;
 }
 
+/** How a choice question's options may be trimmed for a provider whose
+ * `maxChoiceOptions` is below the option count: `pinned` options (sentinels
+ * such as "none") always stay, then `ranked` options in order fill the rest. */
+export interface ChoiceRanking {
+  ranked: readonly string[];
+  pinned: readonly string[];
+}
+
 export interface VerdictAskInput {
   policy: string;
   companyId: string;
   state: unknown;
   questions: DecisionQuestions;
+  /** Choice questions that may be capped by ranking, keyed by question name. */
+  choiceRanking?: Record<string, ChoiceRanking>;
+}
+
+/**
+ * Caps each ranked choice question to `maxOptions`: pinned options, then the
+ * best-ranked rest. Kept options stay in the question's own order, so a capped
+ * question is a subset of the original, not a reshuffle. Unranked questions
+ * and questions already within the cap are returned as is.
+ */
+export function capRankedChoices(
+  questions: DecisionQuestions,
+  ranking: Record<string, ChoiceRanking> | undefined,
+  maxOptions: number,
+): DecisionQuestions {
+  if (!ranking) return questions;
+  let capped: DecisionQuestions | null = null;
+  for (const [name, { ranked, pinned }] of Object.entries(ranking)) {
+    const question = questions[name];
+    if (question?.type !== "choice") continue;
+    const options = Object.keys(question.criteria);
+    if (options.length <= maxOptions) continue;
+    const keep = new Set(pinned.filter((option) => options.includes(option)));
+    for (const option of [...ranked, ...options]) {
+      if (keep.size >= maxOptions) break;
+      if (options.includes(option)) keep.add(option);
+    }
+    capped ??= { ...questions };
+    capped[name] = {
+      ...question,
+      criteria: Object.fromEntries(Object.entries(question.criteria).filter(([option]) => keep.has(option))),
+    };
+  }
+  return capped ?? questions;
 }
 
 export interface VerdictAskOutcome {
@@ -39,6 +84,12 @@ export interface VerdictAskOutcome {
   rateVersion: string | null;
   /** The provider that actually answered — a fallback if the primary failed. */
   provider: DecisionProvider;
+  /** The chain head the call was meant for. */
+  requestedProvider: DecisionProvider;
+  /** Why the chain moved on from the provider before the one that answered:
+   * an `ErrorClass`, or a capability reason code for a pre-check skip. `null`
+   * when the primary answered. */
+  fallbackFrom: ErrorClass | CapabilityReason | null;
   hostInvocationId: string | null;
 }
 
@@ -70,11 +121,16 @@ export function checkCapabilities(
 }
 
 /**
- * Provider-agnostic ask pipeline: canonicalize, redact, truncate, hash, check
- * the cache and daily budget, call the provider under bounded concurrency and
- * a total time budget, then account cost and cache the validated result. The
- * provider call is the only provider-specific step. On failure the next
- * provider in the chain is tried; a capability mismatch skips straight to it.
+ * Provider-agnostic ask pipeline: canonicalize, redact (state and question
+ * text), truncate, hash, check the cache and daily budget, call the provider
+ * under bounded concurrency and a total time budget, then account cost, check
+ * the answers against the questions sent (`validateAnswersAgainst`) and cache
+ * the result. The provider call is the only provider-specific step.
+ *
+ * Fallback: a capability mismatch skips straight to the next provider; a
+ * failure moves on only when its `ErrorClass` is one `shouldFallBack` allows
+ * (outages and invalid output, never a refusal, auth/config error or budget
+ * stop), and only while the chain's shared `totalBudgetMs` lasts.
  */
 export class DecisionPipeline {
   private readonly providers: readonly DecisionProvider[];
@@ -123,23 +179,36 @@ export class DecisionPipeline {
     const redacted = redactText(canonicalState, this.redactionPatterns);
     const truncated = truncateHeadTail(redacted, this.maxStateChars);
     const stateHash = sha256Hex(truncated);
-    const canonicalQuestions = canonicalize(input.questions);
+    // Question text is agent- and policy-supplied, so it redacts like state.
+    const canonicalQuestions = canonicalize(redactQuestions(input.questions, this.redactionPatterns).questions);
     const questionsHash = sha256Hex(canonicalQuestions);
     const requestBytes = Buffer.byteLength(truncated, "utf8") + Buffer.byteLength(canonicalQuestions, "utf8");
 
     // Surface the first real provider failure; a capability skip only wins
     // when no provider in the chain could take the request at all.
+    const deadline = started + this.totalBudgetMs;
     const failures: unknown[] = [];
+    let fallbackFrom: VerdictAskOutcome["fallbackFrom"] = null;
     for (const provider of this.providers) {
-      const capabilityReason = checkCapabilities(provider, input.questions, requestBytes);
+      if (failures.length > 0 && Date.now() >= deadline) break;
+      const sent = redactQuestions(
+        capRankedChoices(input.questions, input.choiceRanking, provider.capabilities.maxChoiceOptions),
+        this.redactionPatterns,
+      );
+      const capabilityReason = checkCapabilities(provider, sent.questions, requestBytes);
       if (capabilityReason) {
         failures.push(new CapabilityError(capabilityReason, provider.id));
+        fallbackFrom ??= capabilityReason;
         continue;
       }
       try {
-        return await this.askProvider(provider, input, { truncated, stateHash, questionsHash, started });
+        const outcome = await this.askProvider(provider, sent, input, { truncated, stateHash, questionsHash, started, deadline });
+        return { ...outcome, requestedProvider: this.primary, fallbackFrom };
       } catch (error) {
         failures.push(error);
+        const errorClass = errorClassOf(error);
+        if (!shouldFallBack(errorClass)) break;
+        fallbackFrom ??= errorClass;
       }
     }
     throw failures.find((error) => !(error instanceof CapabilityError)) ?? failures[0];
@@ -151,10 +220,11 @@ export class DecisionPipeline {
 
   private async askProvider(
     provider: DecisionProvider,
+    sent: RedactedQuestions,
     input: VerdictAskInput,
-    prepared: { truncated: string; stateHash: string; questionsHash: string; started: number },
-  ): Promise<VerdictAskOutcome> {
-    const { truncated, stateHash, questionsHash, started } = prepared;
+    prepared: { truncated: string; stateHash: string; questionsHash: string; started: number; deadline: number },
+  ): Promise<Omit<VerdictAskOutcome, "requestedProvider" | "fallbackFrom">> {
+    const { truncated, stateHash, questionsHash, started, deadline } = prepared;
     const hostBilled = provider.capabilities.billing === "host";
     const cacheKey = cacheKeyFor({
       policy: input.policy,
@@ -187,21 +257,28 @@ export class DecisionPipeline {
       }
     }
 
-    const { hostInvocationId, ...result } = await this.semaphore.run(() =>
+    const { hostInvocationId, ...decided } = await this.semaphore.run(() =>
       provider.decide(
-        { state: truncated, questions: input.questions, model: provider.model },
-        { signal: AbortSignal.timeout(this.totalBudgetMs) },
+        { state: truncated, questions: sent.questions, model: provider.model },
+        // Measured once the semaphore admits the call, so queueing counts
+        // against the chain's budget too.
+        { signal: AbortSignal.timeout(Math.max(deadline - Date.now(), 1)) },
       ),
     );
-    const cost = hostBilled ? null : (provider.estimateCostUsd?.(result.usage) ?? null);
+    const cost = hostBilled ? null : (provider.estimateCostUsd?.(decided.usage) ?? null);
 
     if (budgetStore) {
       const dateKey = utcDateKey(this.now());
       await budgetStore.add(input.companyId, dateKey, {
-        tokens: result.usage.input_tokens + result.usage.output_tokens,
+        tokens: decided.usage.input_tokens + decided.usage.output_tokens,
         costUsd: cost?.usd ?? 0,
       });
     }
+
+    // Checked against what this provider was actually sent (capped and
+    // redacted), after its spend is counted and before anything is cached.
+    validateAnswersAgainst(sent.questions, decided.answers);
+    const result = { ...decided, answers: sent.restore(decided.answers) };
 
     this.cache?.set(cacheKey, { result, cachedAt: Date.now() });
     return {
@@ -223,6 +300,7 @@ export function answeredByFields(outcome: VerdictAskOutcome) {
     provider: outcome.provider.id,
     providerKind: outcome.provider.kind,
     model: outcome.result.model,
+    fallbackFrom: outcome.fallbackFrom,
     rateVersion: outcome.rateVersion,
     hostInvocationId: outcome.hostInvocationId,
   };

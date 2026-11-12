@@ -1,0 +1,143 @@
+{
+  "source": "recorded",
+  "recordedAt": "2026-11-11",
+  "provider": "cloudflare",
+  "model": "clef-flash",
+  "name": "models",
+  "request": {
+    "method": "GET",
+    "path": "/client/v4/accounts/<account-id>/ai/models/search?search=clef",
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "success": true,
+      "result": [
+        {
+          "id": "<uuid>",
+          "source": 1,
+          "name": "@cf/cloudflare/clef",
+          "description": "Clef is a 27B multimodal decision model that turns a state and a schema of typed questions into decisions. It reads the state as text, JSON, images, or video, and returns a probability for every allowed option of every question.",
+          "task": {
+            "id": "<uuid>",
+            "name": "Text Generation",
+            "description": "Family of generative text models, such as large language models (LLM), that can be adapted for a variety of natural language tasks."
+          },
+          "created_at": "2026-09-29 14:05:24.552",
+          "tags": [],
+          "properties": [
+            {
+              "property_id": "context_window",
+              "value": "65536"
+            },
+            {
+              "property_id": "price",
+              "value": [
+                {
+                  "unit": "per M input tokens",
+                  "price": 0.24,
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "property_id": "info",
+              "value": "https://huggingface.co/Cloudflare/clef"
+            },
+            {
+              "property_id": "terms",
+              "value": "https://huggingface.co/Cloudflare/clef/blob/main/LICENSE"
+            },
+            {
+              "property_id": "vision",
+              "value": "true"
+            }
+          ]
+        },
+        {
+          "id": "<uuid>",
+          "source": 1,
+          "name": "@cf/cloudflare/clef-omni",
+          "description": "Clef-omni is a multimodal decision model built on a 30B-parameter mixture-of-experts (3B active) backbone. It turns a state and a schema of typed questions into decisions, reads the state as text, JSON, images, audio, or video, and returns a probability for every allowed option of every question.",
+          "task": {
+            "id": "<uuid>",
+            "name": "Text Generation",
+            "description": "Family of generative text models, such as large language models (LLM), that can be adapted for a variety of natural language tasks."
+          },
+          "created_at": "2026-10-09 01:37:45.295",
+          "tags": [],
+          "properties": [
+            {
+              "property_id": "context_window",
+              "value": "65536"
+            },
+            {
+              "property_id": "price",
+              "value": [
+                {
+                  "unit": "per M input tokens",
+                  "price": 0.15,
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "property_id": "vision",
+              "value": "true"
+            }
+          ]
+        },
+        {
+          "id": "<uuid>",
+          "source": 1,
+          "name": "@cf/cloudflare/clef-flash",
+          "description": "Clef-flash is a fast 9B multimodal decision model that turns a state and a schema of typed questions into decisions. It reads the state as text, JSON, images, or video, and returns a probability for every allowed option of every question.",
+          "task": {
+            "id": "<uuid>",
+            "name": "Text Generation",
+            "description": "Family of generative text models, such as large language models (LLM), that can be adapted for a variety of natural language tasks."
+          },
+          "created_at": "2026-09-29 09:25:44.258",
+          "tags": [],
+          "properties": [
+            {
+              "property_id": "context_window",
+              "value": "24576"
+            },
+            {
+              "property_id": "price",
+              "value": [
+                {
+                  "unit": "per M input tokens",
+                  "price": 0.038,
+                  "currency": "USD"
+                }
+              ]
+            },
+            {
+              "property_id": "info",
+              "value": "https://huggingface.co/Cloudflare/clef-flash"
+            },
+            {
+              "property_id": "terms",
+              "value": "https://huggingface.co/Cloudflare/clef-flash/blob/main/LICENSE"
+            },
+            {
+              "property_id": "vision",
+              "value": "true"
+            }
+          ]
+        }
+      ],
+      "errors": [],
+      "messages": [],
+      "result_info": {
+        "count": 3,
+        "page": 1,
+        "per_page": 100,
+        "total_count": 333
+      }
+    }
+  }
+}

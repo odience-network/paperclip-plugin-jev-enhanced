@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { CLOUDFLARE_MODELS } from "./decision/providers/cloudflare.js";
+import { SYSTEMONE_PRESETS } from "./decision/providers/presets.js";
 
 export const POLICY_MODES = ["shadow", "suggest", "enforce"] as const;
 export type PolicyMode = (typeof POLICY_MODES)[number];
@@ -139,8 +141,12 @@ export type GuardRailsConfig = z.infer<typeof guardRailsConfigSchema>;
 
 const providerIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/, "provider ids are lowercase letters, digits and dashes");
 
-/** `cloudflare` and `openai` adapters land in G3; until then the schema only
- * admits the kinds this build can construct. */
+/** Cloudflare account ids are 32 hex characters. Configuration, not a secret,
+ * but never committed: it identifies the board's account. */
+const cloudflareAccountIdSchema = z.string().regex(/^[0-9a-f]{32}$/i, "accountId is the 32-character Cloudflare account id");
+
+/** One entry of `providers`, validated per `kind`. Every kind but `core`
+ * takes its credential as a vault `apiKeyRef`, never a literal. */
 const providerConfigSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -153,9 +159,43 @@ const providerConfigSchema = z.discriminatedUnion("kind", [
       authStyle: z.enum(["bearer", "x-api-key", "none"]).optional(),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("cloudflare"),
+      accountId: cloudflareAccountIdSchema,
+      apiKeyRef: secretRefSchema.optional(),
+      model: z.enum(CLOUDFLARE_MODELS).optional(),
+      baseUrl: z.string().url().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("openai"),
+      apiKeyRef: secretRefSchema.optional(),
+      model: z.string().min(1).optional(),
+      baseUrl: z.string().url().optional(),
+    })
+    .strict(),
   z.object({ kind: z.literal("core"), model: z.string().min(1).optional() }).strict(),
 ]);
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
+
+/** True when calls to this provider carry a credential: a bound `apiKeyRef`,
+ * or an auth style other than `none` (`cloudflare`/`openai` always send one). */
+function sendsCredential(providerConfig: ProviderConfig): boolean {
+  switch (providerConfig.kind) {
+    case "systemone":
+      return (
+        providerConfig.apiKeyRef !== undefined ||
+        (providerConfig.authStyle ?? SYSTEMONE_PRESETS[providerConfig.preset]?.authStyle) !== "none"
+      );
+    case "cloudflare":
+    case "openai":
+      return true;
+    case "core":
+      return false;
+  }
+}
 
 export const verdictConfigSchema = z.object({
   /** Deprecated: read as an implicit `typesafe` provider when `providers` is empty. */
@@ -178,6 +218,23 @@ export const verdictConfigSchema = z.object({
    * reason about. Checked deterministically before any provider call —
    * never relaxed by a policy threshold or by the model's own judgement. */
   browserAllowedOrigins: z.array(browserOriginSchema).default([]),
+}).superRefine((config, ctx) => {
+  // The host's plugin fetch allows `http:`, so a credentialed provider on a
+  // plain-HTTP baseUrl would send its bearer token in cleartext.
+  const requireHttps = (baseUrl: string | undefined, path: (string | number)[]) => {
+    if (baseUrl !== undefined && URL.canParse(baseUrl) && new URL(baseUrl).protocol !== "https:") {
+      ctx.addIssue({
+        code: "custom",
+        path,
+        message: "baseUrl must be https: for a provider that sends a credential; http: is only allowed with authStyle \"none\"",
+      });
+    }
+  };
+  for (const [id, providerConfig] of Object.entries(config.providers)) {
+    if ("baseUrl" in providerConfig && sendsCredential(providerConfig)) requireHttps(providerConfig.baseUrl, ["providers", id, "baseUrl"]);
+  }
+  // The legacy top-level fields are read as a `typesafe` (bearer) provider.
+  requireHttps(config.baseUrl, ["baseUrl"]);
 });
 export type VerdictConfig = z.infer<typeof verdictConfigSchema>;
 

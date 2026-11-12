@@ -1,9 +1,11 @@
 import type { Fetch, RetryPolicy } from "@typesafe-ai/sdk";
 import type { VerdictConfig, ProviderBinding, ProviderConfig } from "../config.js";
-import { MissingApiKeyError } from "./errors.js";
+import { EgressBlockedError, MissingApiKeyError } from "./errors.js";
 import { DecisionPipeline, type DecisionPipelineOptions } from "./pipeline.js";
 import { providerModelKey, type DecisionProvider } from "./provider.js";
+import { CLOUDFLARE_API_BASE, CLOUDFLARE_DISCLOSURE, CloudflareProvider } from "./providers/cloudflare.js";
 import { CoreProvider, detectHostDecisions } from "./providers/core.js";
+import { OPENAI_API_BASE, OPENAI_DISCLOSURE, OpenAiProvider } from "./providers/openai.js";
 import { SYSTEMONE_PRESETS } from "./providers/presets.js";
 import { SystemOneProvider } from "./providers/systemone.js";
 
@@ -60,11 +62,18 @@ export function resolvePolicyProviderIds(config: VerdictConfig, policyName: stri
 }
 
 export function buildProvider(id: string, providerConfig: ProviderConfig, runtime: ProviderRuntime): DecisionProvider {
+  const http = { timeoutMs: runtime.timeoutMs, fetchImpl: runtime.fetchImpl, retry: runtime.retry };
+  const resolveApiKey = async () => {
+    const apiKeyRef = "apiKeyRef" in providerConfig ? providerConfig.apiKeyRef : undefined;
+    if (!apiKeyRef) {
+      throw new MissingApiKeyError(`No API key bound for provider "${id}". Bind a vault secret to its apiKeyRef.`);
+    }
+    return runtime.resolveSecret(apiKeyRef);
+  };
   switch (providerConfig.kind) {
     case "systemone": {
       const preset = SYSTEMONE_PRESETS[providerConfig.preset];
       if (!preset) throw new Error(`Unknown SystemOne preset "${providerConfig.preset}" for provider "${id}"`);
-      const apiKeyRef = providerConfig.apiKeyRef;
       return new SystemOneProvider({
         id,
         preset,
@@ -72,20 +81,100 @@ export function buildProvider(id: string, providerConfig: ProviderConfig, runtim
         baseUrl: providerConfig.baseUrl,
         path: providerConfig.path,
         authStyle: providerConfig.authStyle,
-        resolveApiKey: async () => {
-          if (!apiKeyRef) {
-            throw new MissingApiKeyError(`No API key bound for provider "${id}". Bind a vault secret to its apiKeyRef.`);
-          }
-          return runtime.resolveSecret(apiKeyRef);
-        },
-        timeoutMs: runtime.timeoutMs,
-        fetchImpl: runtime.fetchImpl,
-        retry: runtime.retry,
+        resolveApiKey,
+        ...http,
       });
     }
+    case "cloudflare":
+      return new CloudflareProvider({
+        id,
+        accountId: providerConfig.accountId,
+        model: providerConfig.model,
+        baseUrl: providerConfig.baseUrl,
+        resolveApiKey,
+        ...http,
+      });
+    case "openai":
+      return new OpenAiProvider({ id, model: providerConfig.model, baseUrl: providerConfig.baseUrl, resolveApiKey, ...http });
     case "core":
       return new CoreProvider(id, runtime.host, providerConfig.model);
   }
+}
+
+/** Which host receives state text, and its published retention. Shown next
+ * to each provider in the health widget. A `baseUrl` that moves the provider
+ * off its known host gets a neutral line naming that origin instead: the
+ * known host's retention says nothing about where the request now goes. */
+export function providerDisclosure(providerConfig: ProviderConfig): string {
+  const origin = providerOrigin(providerConfig);
+  if (origin !== null && origin !== knownOrigin(providerConfig)) {
+    return `Sends redacted state text to ${origin} (custom base URL; retention unknown).`;
+  }
+  switch (providerConfig.kind) {
+    case "systemone":
+      return SYSTEMONE_PRESETS[providerConfig.preset]?.disclosure ?? `Sends redacted state text to ${providerOrigin(providerConfig)}.`;
+    case "cloudflare":
+      return CLOUDFLARE_DISCLOSURE;
+    case "openai":
+      return OPENAI_DISCLOSURE;
+    case "core":
+      return "Uses the host's own decision service; the host holds the credential and the data path.";
+  }
+}
+
+/** True when the provider needs a vault secret and none is bound. */
+export function providerNeedsKey(providerConfig: ProviderConfig): boolean {
+  switch (providerConfig.kind) {
+    case "systemone":
+      return !providerConfig.apiKeyRef && (providerConfig.authStyle ?? SYSTEMONE_PRESETS[providerConfig.preset]?.authStyle) !== "none";
+    case "cloudflare":
+    case "openai":
+      return !providerConfig.apiKeyRef;
+    case "core":
+      return false;
+  }
+}
+
+/** The origin a provider sends requests to: its `baseUrl` override, else the
+ * kind's (or preset's) known host. `null` for `core`, which makes no HTTP call. */
+function providerOrigin(providerConfig: ProviderConfig): string | null {
+  switch (providerConfig.kind) {
+    case "systemone": {
+      const base = providerConfig.baseUrl ?? SYSTEMONE_PRESETS[providerConfig.preset]?.baseUrl;
+      return base ? new URL(base).origin : null;
+    }
+    case "cloudflare":
+      return new URL(providerConfig.baseUrl ?? CLOUDFLARE_API_BASE).origin;
+    case "openai":
+      return new URL(providerConfig.baseUrl ?? OPENAI_API_BASE).origin;
+    case "core":
+      return null;
+  }
+}
+
+/** The origin a provider kind (or preset) sends to with no `baseUrl` override. */
+function knownOrigin(providerConfig: ProviderConfig): string | null {
+  return providerOrigin({ ...providerConfig, baseUrl: undefined } as ProviderConfig);
+}
+
+/** Origins provider calls may reach: exactly the hosts of the configured
+ * providers (plan 2.2). Anything else is refused before a request is made. */
+export function egressAllowlist(config: VerdictConfig): Set<string> {
+  const origins = new Set<string>();
+  for (const providerConfig of Object.values(effectiveProviders(config).providers)) {
+    const origin = providerOrigin(providerConfig);
+    if (origin) origins.add(origin);
+  }
+  return origins;
+}
+
+/** Wraps a fetch so it only reaches allowlisted origins. */
+export function allowlistedFetch(allowlist: ReadonlySet<string>, inner: Fetch): Fetch {
+  return (input, init) => {
+    const origin = new URL(input).origin;
+    if (!allowlist.has(origin)) return Promise.reject(new EgressBlockedError(origin));
+    return inner(input, init);
+  };
 }
 
 /** Builds the `[primary, ...fallbacks]` chain for one policy. `core` is

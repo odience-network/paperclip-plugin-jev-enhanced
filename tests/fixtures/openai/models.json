@@ -1,0 +1,22 @@
+{
+  "source": "recorded",
+  "recordedAt": "2026-11-11",
+  "provider": "openai",
+  "model": "gpt-6-luna",
+  "name": "models",
+  "request": {
+    "method": "GET",
+    "path": "/v1/models/gpt-6-luna",
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "gpt-6-luna",
+      "object": "model",
+      "created": 1789406102,
+      "owned_by": "system",
+      "shutdown_date": null
+    }
+  }
+}

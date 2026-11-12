@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PolicyMode } from "../config.js";
+import type { ErrorClass } from "../decision/errors.js";
 import type { ProviderKind } from "../decision/provider.js";
 import { type LedgerDb, tableName } from "./db.js";
 
@@ -56,6 +57,10 @@ export interface CompleteDecisionInput {
   /** Set when the answering provider's binding forced a different mode than
    * the one recorded at `beginDecision` time. */
   mode?: PolicyMode;
+  /** Why the chain moved past the provider before the one that answered. */
+  fallbackFrom?: string | null;
+  /** Set on `error` rows. */
+  errorClass?: ErrorClass | null;
 }
 
 export interface DecisionRow {
@@ -81,6 +86,10 @@ export interface DecisionRow {
   toolName: string | null;
   provider: string;
   providerKind: ProviderKind;
+  /** The chain head; differs from `provider` when a fallback answered. */
+  requestedProvider: string;
+  fallbackFrom: string | null;
+  errorClass: ErrorClass | null;
   rateVersion: string | null;
   hostInvocationId: string | null;
   decisionGroupId: string | null;
@@ -111,6 +120,9 @@ interface DecisionDbRow {
   tool_name: string | null;
   provider?: string;
   provider_kind?: ProviderKind;
+  requested_provider?: string | null;
+  fallback_from?: string | null;
+  error_class?: ErrorClass | null;
   rate_version?: string | null;
   host_invocation_id?: string | null;
   decision_group_id?: string | null;
@@ -142,6 +154,9 @@ function fromDbRow(row: DecisionDbRow): DecisionRow {
     toolName: row.tool_name,
     provider: row.provider ?? "typesafe",
     providerKind: row.provider_kind ?? "systemone",
+    requestedProvider: row.requested_provider ?? row.provider ?? "typesafe",
+    fallbackFrom: row.fallback_from ?? null,
+    errorClass: row.error_class ?? null,
     rateVersion: row.rate_version ?? null,
     hostInvocationId: row.host_invocation_id ?? null,
     decisionGroupId: row.decision_group_id ?? null,
@@ -161,8 +176,8 @@ export async function beginDecision(db: LedgerDb, input: BeginDecisionInput): Pr
   await db.execute(
     `INSERT INTO ${tableName(db, "verdict_decisions")}
        (id, company_id, issue_id, run_id, agent_id, policy, policy_version, question_version, model, state_hash, mode, outcome, tool_name,
-        provider, provider_kind, decision_group_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'observed', $12, $13, $14, $15)`,
+        provider, provider_kind, decision_group_id, requested_provider)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'observed', $12, $13, $14, $15, $13)`,
     [
       id,
       input.companyId,
@@ -202,6 +217,8 @@ export async function completeDecision(db: LedgerDb, id: string, patch: Complete
          rate_version = $14,
          host_invocation_id = $15,
          mode = coalesce($16, mode),
+         fallback_from = $17,
+         error_class = $18,
          updated_at = now()
      WHERE id = $1`,
     [
@@ -221,6 +238,8 @@ export async function completeDecision(db: LedgerDb, id: string, patch: Complete
       patch.rateVersion ?? null,
       patch.hostInvocationId ?? null,
       patch.mode ?? null,
+      patch.fallbackFrom ?? null,
+      patch.errorClass ?? null,
     ],
   );
 }

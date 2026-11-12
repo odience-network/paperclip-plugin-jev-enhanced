@@ -69,6 +69,16 @@ export interface IssueTriageOptions {
   issueTypeLabelIds?: Record<string, string>;
 }
 
+function wordsOf(text: string): Set<string> {
+  return new Set(text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []);
+}
+
+function overlapCount(a: Set<string>, b: Set<string>): number {
+  let count = 0;
+  for (const word of b) if (a.has(word)) count++;
+  return count;
+}
+
 export const issueTriagePolicy: Policy<IssueTriageState> = {
   name: "issue-triage",
   version: "1.0.0",
@@ -170,6 +180,29 @@ export const issueTriagePolicy: Policy<IssueTriageState> = {
     return questions;
   },
 
+  /** For a provider with fewer choice slots than candidates (Clef: 26, core:
+   * 20), keep the candidates whose name/role or title shares the most words
+   * with this issue; the sentinels always stay. Ties keep the state's order
+   * (agent list order, newest issues first). */
+  rankChoices(state) {
+    const issueWords = wordsOf(`${state.title} ${state.description ?? ""}`);
+    const rank = <T>(items: T[], id: (item: T) => string, text: (item: T) => string) =>
+      items
+        .map((item, index) => ({ id: id(item), index, overlap: overlapCount(issueWords, wordsOf(text(item))) }))
+        .sort((a, b) => b.overlap - a.overlap || a.index - b.index)
+        .map((entry) => entry.id);
+    return {
+      owner: {
+        ranked: rank(state.eligibleAgents, (agent) => agent.id, (agent) => `${agent.name} ${agent.role}`),
+        pinned: ["unassigned", "needs_triage"],
+      },
+      duplicateOf: {
+        ranked: rank(state.recentOpenIssues, (issue) => issue.id, (issue) => issue.title),
+        pinned: ["none"],
+      },
+    };
+  },
+
   decide(answers, ctx, state): PolicyVerdict {
     const confidenceMin = ctx.config.thresholds.confidenceMin ?? 0.7;
     const marginMin = ctx.config.thresholds.marginMin ?? 0.15;
@@ -195,6 +228,10 @@ export const issueTriagePolicy: Policy<IssueTriageState> = {
       const hasUserAssignee = state?.hasUserAssignee ?? true;
       const isSentinel = ownerAnswer.choice === "unassigned" || ownerAnswer.choice === "needs_triage";
       const value = isSentinel ? null : ownerAnswer.choice;
+      // The pipeline already rejects options that weren't offered; this is
+      // the second line, so an owner outside `eligibleAgents` (or one that
+      // can't be checked without state) is never applied.
+      const isEligible = isSentinel || (state?.eligibleAgents.some((agent) => agent.id === ownerAnswer.choice) ?? false);
       // Only a specific new owner, and only when nothing is set yet, can
       // ever auto-apply; `alwaysAuto`/`!respect` only ever lets this touch
       // an *agent*-set owner, never a human one (see below).
@@ -202,7 +239,10 @@ export const issueTriagePolicy: Policy<IssueTriageState> = {
 
       let action: FieldDecision["action"];
       let reason: string | undefined;
-      if (!clears(ownerCm)) {
+      if (!isEligible) {
+        action = "observe";
+        reason = "ineligible-owner";
+      } else if (!clears(ownerCm)) {
         action = "observe";
         reason = "below-threshold";
       } else if (hasUserAssignee) {
