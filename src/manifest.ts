@@ -98,6 +98,10 @@ const manifest: PaperclipPluginManifestV1 = {
           "Decision providers by alias. Kinds: " +
           "{ kind: \"systemone\", preset, apiKeyRef, model?, baseUrl?, path?, authStyle? }: preset \"typesafe\" " +
           "sends redacted state text to TypeSafe (api.typesafe.ai; zero data retention on enterprise plans only). " +
+          "Presets \"perplexity\", \"openrouter\", \"decisions-api\" and \"kev\" (Opper, EU) send it to that hosted " +
+          "provider; \"ollama\", \"laya\" and \"von\" send it to your own server at baseUrl. Those seven are built " +
+          "from published docs and are not live-verified: policies on them stay in shadow until thresholds are " +
+          "calibrated for them. " +
           "{ kind: \"cloudflare\", accountId, apiKeyRef, model: \"clef\" | \"clef-flash\" }: " +
           `${CLOUDFLARE_DISCLOSURE} ` +
           "{ kind: \"openai\", apiKeyRef, model? (default gpt-6-luna) }: " +
@@ -109,7 +113,11 @@ const manifest: PaperclipPluginManifestV1 = {
           type: "object",
           properties: {
             kind: { type: "string", enum: ["systemone", "cloudflare", "openai", "core"] },
-            preset: { type: "string", enum: ["typesafe"], default: "typesafe" },
+            preset: {
+              type: "string",
+              enum: ["typesafe", "perplexity", "openrouter", "decisions-api", "ollama", "laya", "von", "kev"],
+              default: "typesafe",
+            },
             apiKeyRef: { type: "string", format: "secret-ref" },
             accountId: {
               type: "string",

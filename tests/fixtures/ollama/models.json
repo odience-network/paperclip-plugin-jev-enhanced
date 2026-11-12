@@ -1,0 +1,21 @@
+{
+  "source": "docs",
+  "docsUrl": "https://github.com/ollama/ollama/blob/main/docs/api.md#list-local-models",
+  "notes": "GET /api/tags, Ollama's native model list. Digest and sizes are placeholders.",
+  "path": "/api/tags",
+  "response": {
+    "models": [
+      {
+        "name": "clef:latest",
+        "model": "clef:latest",
+        "modified_at": "2026-10-01T00:00:00Z",
+        "size": 19000000000,
+        "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+        "details": {
+          "family": "clef",
+          "parameter_size": "27B"
+        }
+      }
+    ]
+  }
+}

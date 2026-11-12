@@ -45,9 +45,15 @@ export interface CostEstimate {
 }
 
 /** `hostInvocationId` is set by host-billed providers so the ledger row can
- * join to the host's own cost record. Never cached. `confidenceSource` is set
- * by adapters that run `withDerivedConfidence`; absent means native. */
-export type ProviderDecision = DecisionResult & { hostInvocationId?: string; confidenceSource?: ConfidenceSource | null };
+ * join to the host's own cost record. `reportedCost` is the cost the provider
+ * returned with the answer (OpenRouter `usage.cost`), used instead of a rate
+ * card. Neither is cached. `confidenceSource` is set by adapters that run
+ * `withDerivedConfidence`; absent means native. */
+export type ProviderDecision = DecisionResult & {
+  hostInvocationId?: string;
+  reportedCost?: CostEstimate;
+  confidenceSource?: ConfidenceSource | null;
+};
 
 export interface DecisionProvider {
   /** Config alias, e.g. `"typesafe"`, `"cf-clef"`, `"core"`. */

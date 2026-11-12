@@ -44,7 +44,7 @@ export class SystemOneProvider implements DecisionProvider {
   readonly estimateCostUsd?: (usage: DecisionUsage) => { usd: number; rateVersion: string };
   private readonly baseUrl: string;
   private readonly path: string;
-  private readonly modelsPath: string;
+  private readonly modelsPath: string | null;
   private readonly authStyle: SystemOneAuthStyle;
   private readonly timeoutMs: number;
 
@@ -54,9 +54,11 @@ export class SystemOneProvider implements DecisionProvider {
     this.id = options.id;
     this.preset = preset.name;
     this.model = preset.modelAliases[requested] ?? requested;
+    if (!this.model) throw new Error(`SystemOne provider "${options.id}": preset "${preset.name}" has no default model; set model`);
     this.capabilities = preset.capabilities;
     this.verification = preset.verification;
     this.baseUrl = (options.baseUrl ?? preset.baseUrl).replace(/\/+$/, "");
+    if (!this.baseUrl) throw new Error(`SystemOne provider "${options.id}": preset "${preset.name}" has no default host; set baseUrl`);
     this.path = options.path ?? preset.path;
     this.modelsPath = preset.modelsPath;
     this.authStyle = options.authStyle ?? preset.authStyle;
@@ -67,7 +69,10 @@ export class SystemOneProvider implements DecisionProvider {
     }
   }
 
+  /** Presets without a documented models endpoint are not pinged: there is
+   * no free request to make, and a decide call would cost money. */
   async availability(): Promise<ProviderAvailability> {
+    if (this.modelsPath === null) return { ok: true, reason: "not-checked" };
     try {
       await this.listModels();
       return { ok: true };
@@ -83,7 +88,10 @@ export class SystemOneProvider implements DecisionProvider {
       { timeout: this.timeoutMs, signal: opts.signal },
     );
 
-    const { raw: filled, confidenceSource } = withDerivedConfidence(JSON.parse(JSON.stringify(raw)));
+    const json: unknown = JSON.parse(JSON.stringify(raw));
+    const { body, reportedCost } = this.options.preset.normalizeResponse?.(json, req.model) ?? { body: json };
+    assertNoRefusal(body);
+    const { raw: filled, confidenceSource } = withDerivedConfidence(body);
     const parsed = verdictAskResultSchema.safeParse(filled);
     if (!parsed.success) {
       throw new VerdictValidationError(`Provider response failed validation: ${parsed.error.message}`, parsed.error);
@@ -91,10 +99,11 @@ export class SystemOneProvider implements DecisionProvider {
     if (parsed.data.model !== req.model) {
       throw new VerdictValidationError(`Provider model echo mismatch: requested "${req.model}", got "${parsed.data.model}"`);
     }
-    return { ...parsed.data, confidenceSource };
+    return reportedCost ? { ...parsed.data, confidenceSource, reportedCost } : { ...parsed.data, confidenceSource };
   }
 
   async listModels(): Promise<ModelCard[]> {
+    if (this.modelsPath === null) return [];
     const client = await this.buildSdkClient();
     return client.models.list();
   }
@@ -132,12 +141,25 @@ export class SystemOneProvider implements DecisionProvider {
     return (input, init) => {
       let url = String(input);
       if (url === `${baseUrl}${SDK_SYSTEMONE_PATH}`) url = `${baseUrl}${path}`;
-      else if (url === `${baseUrl}${SDK_MODELS_PATH}`) url = `${baseUrl}${modelsPath}`;
+      else if (url === `${baseUrl}${SDK_MODELS_PATH}` && modelsPath) url = `${baseUrl}${modelsPath}`;
       if (authStyle === "bearer") return inner(url, init);
       const headers = new Headers(init?.headers);
       headers.delete("authorization");
       if (authStyle === "x-api-key") headers.set("x-api-key", apiKey);
       return inner(url, { ...init, headers });
     };
+  }
+}
+
+/** SystemOne forwarders (OpenRouter) may answer `{type: "refusal"}` for a
+ * question the upstream declined. A refusal is never an answer: it fails the
+ * whole decision, so the policy records an error instead of acting. */
+function assertNoRefusal(body: unknown): void {
+  const answers = (body as { answers?: unknown } | null)?.answers;
+  if (typeof answers !== "object" || answers === null) return;
+  for (const [name, answer] of Object.entries(answers)) {
+    if ((answer as { type?: unknown } | null)?.type === "refusal") {
+      throw new VerdictValidationError(`Provider refused question "${name}"`);
+    }
   }
 }

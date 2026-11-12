@@ -287,7 +287,7 @@ export class DecisionPipeline {
       }
     }
 
-    const { hostInvocationId, confidenceSource, ...decided } = await this.semaphore.run(() =>
+    const { hostInvocationId, reportedCost, confidenceSource, ...decided } = await this.semaphore.run(() =>
       provider.decide(
         { state: truncated, questions: sent.questions, model: provider.model },
         // Measured once the semaphore admits the call, so queueing counts
@@ -295,7 +295,7 @@ export class DecisionPipeline {
         { signal: AbortSignal.timeout(Math.max(deadline - Date.now(), 1)) },
       ),
     );
-    const cost = hostBilled ? null : (provider.estimateCostUsd?.(decided.usage) ?? null);
+    const cost = hostBilled ? null : (reportedCost ?? provider.estimateCostUsd?.(decided.usage) ?? null);
 
     if (budgetStore) {
       const dateKey = utcDateKey(this.now());

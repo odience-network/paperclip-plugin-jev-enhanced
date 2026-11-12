@@ -291,12 +291,22 @@ export function validateProviderConfig(config: VerdictConfig, host: unknown): Pr
       const preset = SYSTEMONE_PRESETS[providerConfig.preset];
       if (!preset) {
         errors.push(`providers.${id}: unknown preset "${providerConfig.preset}".`);
-      } else if (preset.pinnedModels && providerConfig.model && callsPresetHost(providerConfig.baseUrl, preset.baseUrl)) {
+        continue;
+      }
+      if (!preset.defaultModel && !providerConfig.model) errors.push(`providers.${id}: preset "${preset.name}" needs a model.`);
+      if (!preset.baseUrl && !providerConfig.baseUrl) errors.push(`providers.${id}: preset "${preset.name}" needs a baseUrl.`);
+      if (preset.pinnedModels && providerConfig.model && callsPresetHost(providerConfig.baseUrl, preset.baseUrl)) {
         const requested = providerConfig.model.trim();
         const model = preset.modelAliases[requested] ?? requested;
         if (!preset.pinnedModels.includes(model)) {
           errors.push(`providers.${id}: model "${requested}" is not an allowed ${preset.name} model (${preset.pinnedModels.join(", ")}).`);
         }
+      }
+      if (preset.verification === "fixtures") {
+        warnings.push(
+          `providers.${id}: preset "${preset.name}" is not live-verified; policies on it stay in shadow until ` +
+            "thresholds are calibrated for it.",
+        );
       }
     } else if (providerConfig.kind === "core" && !coreDetected) {
       warnings.push(`providers.${id}: core: unavailable on this host; it is skipped until the host exposes decisions.`);

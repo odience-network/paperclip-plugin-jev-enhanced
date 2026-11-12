@@ -30,9 +30,39 @@ interface ContractCase {
   /** Model the case's config asks for, and the pinned one that must go on the wire. */
   expectedModel: string;
   expectedPath: string;
-  expectedModelsPath: string;
+  /** `null` for presets that document no models endpoint. */
+  expectedModelsPath: string | null;
   assertAuth: (headers: IncomingHttpHeaders) => void;
+  /** Cost of the synthetic reply (1000 input + 10 output tokens). */
+  expectedCostUsd: number;
   expectedRateVersion: string | null;
+}
+
+const expectBearer = (headers: IncomingHttpHeaders) => {
+  expect(headers.authorization).toBe(`Bearer ${TEST_KEY}`);
+  expect(headers["x-api-key"]).toBeUndefined();
+};
+const expectNoAuth = (headers: IncomingHttpHeaders) => {
+  expect(headers.authorization).toBeUndefined();
+  expect(headers["x-api-key"]).toBeUndefined();
+};
+
+/** Tier B presets (G4): built from published docs, never called live. The
+ * mock server stands in for each documented host via `baseUrl`. */
+function tierBCase(
+  preset: string,
+  overrides: Partial<ContractCase> & Pick<ContractCase, "expectedModel" | "expectedPath">,
+  extraConfig: Record<string, unknown> = {},
+): ContractCase {
+  return {
+    name: `systemone/${preset} preset (fixtures)`,
+    providerConfig: (baseUrl) => ({ kind: "systemone", preset, apiKeyRef: "ref", baseUrl, ...extraConfig }),
+    expectedModelsPath: null,
+    assertAuth: expectBearer,
+    expectedCostUsd: 0,
+    expectedRateVersion: null,
+    ...overrides,
+  };
 }
 
 const SYSTEMONE_CASES: ContractCase[] = [
@@ -42,10 +72,8 @@ const SYSTEMONE_CASES: ContractCase[] = [
     expectedModel: "jev-1.13.0",
     expectedPath: "/v1/systemone",
     expectedModelsPath: "/v1/models",
-    assertAuth: (headers) => {
-      expect(headers.authorization).toBe(`Bearer ${TEST_KEY}`);
-      expect(headers["x-api-key"]).toBeUndefined();
-    },
+    assertAuth: expectBearer,
+    expectedCostUsd: 0.000515,
     expectedRateVersion: "typesafe-2026-10-09",
   },
   {
@@ -66,6 +94,7 @@ const SYSTEMONE_CASES: ContractCase[] = [
       expect(headers["x-api-key"]).toBe(TEST_KEY);
       expect(headers.authorization).toBeUndefined();
     },
+    expectedCostUsd: 0.000515,
     expectedRateVersion: "typesafe-2026-10-09",
   },
   {
@@ -74,12 +103,49 @@ const SYSTEMONE_CASES: ContractCase[] = [
     expectedModel: "clef",
     expectedPath: "/v1/systemone",
     expectedModelsPath: "/v1/models",
-    assertAuth: (headers) => {
-      expect(headers.authorization).toBeUndefined();
-      expect(headers["x-api-key"]).toBeUndefined();
-    },
+    assertAuth: expectNoAuth,
+    expectedCostUsd: 0.000515,
     expectedRateVersion: "typesafe-2026-10-09",
   },
+  tierBCase("perplexity", { expectedModel: "pplx-decider-v1-27b", expectedPath: "/v1/decisions" }),
+  // The synthetic reply carries no `usage.cost`, so nothing is charged; the
+  // reported-cost path is covered by the docs fixture in provider-presets.spec.ts.
+  tierBCase("openrouter", { expectedModel: "typesafe/jev-1.13", expectedPath: "/api/alpha/decisions" }),
+  tierBCase(
+    "decisions-api",
+    { expectedModel: "typesafe/jev-1.13", expectedPath: "/v1/systemone" },
+    { model: "typesafe/jev-1.13" },
+  ),
+  tierBCase("ollama", {
+    expectedModel: "clef",
+    expectedPath: "/v1/systemone",
+    expectedModelsPath: "/api/tags",
+    assertAuth: expectNoAuth,
+  }),
+  tierBCase(
+    "ollama",
+    {
+      name: "systemone/ollama preset, clef-flash",
+      expectedModel: "clef-flash",
+      expectedPath: "/v1/systemone",
+      expectedModelsPath: "/api/tags",
+      assertAuth: expectNoAuth,
+    },
+    { model: "clef-flash" },
+  ),
+  tierBCase("laya", { expectedModel: "laya", expectedPath: "/v1/systemone", assertAuth: expectNoAuth }),
+  tierBCase("von", { expectedModel: "von-1.3.0", expectedPath: "/v1/systemone", assertAuth: expectNoAuth }),
+  tierBCase(
+    "von",
+    { name: "systemone/von preset, VON_API_KEY bearer", expectedModel: "von-1.3.0", expectedPath: "/v1/systemone" },
+    { authStyle: "bearer" },
+  ),
+  tierBCase("kev", {
+    expectedModel: "opper/kev-4b",
+    expectedPath: "/v3/compat/v1/systemone",
+    expectedCostUsd: 0.000042,
+    expectedRateVersion: "kev-opper-2026-09",
+  }),
 ];
 
 function runtime(overrides: Partial<ProviderRuntime> = {}): ProviderRuntime {
@@ -104,6 +170,14 @@ const MIXED_QUESTIONS: DecisionQuestions = {
   rate: { type: "score", instructions: "Rate it", criteria: ["low", "mid", "high"] },
 };
 
+/** `MIXED_QUESTIONS` minus the types the provider doesn't take (Kev documents
+ * no `score`), so every case exercises its full supported surface. */
+function questionsFor(provider: DecisionProvider): DecisionQuestions {
+  const supported = new Set<string>(provider.capabilities.questionTypes);
+  if (supported.has("boolean")) supported.add("noul");
+  return Object.fromEntries(Object.entries(MIXED_QUESTIONS).filter(([, question]) => supported.has(question.type)));
+}
+
 describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
   let server: MockSystemOneServer;
 
@@ -122,23 +196,26 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
     const provider = providerFor(contract, server.secureBaseUrl);
     const pipeline = new DecisionPipeline({ providers: [provider] });
 
-    const outcome = await pipeline.ask({ policy: "contract", companyId: "c1", state: { b: 2, a: 1 }, questions: MIXED_QUESTIONS });
+    const questions = questionsFor(provider);
+
+    const outcome = await pipeline.ask({ policy: "contract", companyId: "c1", state: { b: 2, a: 1 }, questions });
 
     expect(server.requests).toHaveLength(1);
     const [request] = server.requests;
     expect(request.method).toBe("POST");
     expect(request.path).toBe(contract.expectedPath);
     contract.assertAuth(request.headers);
+    const wireQuestions: Record<string, unknown> = {
+      // `boolean` is the canonical name; SystemOne only speaks `noul`.
+      yes_no: { type: "noul", instructions: "Is this a test?" },
+      legacy_yes_no: { type: "noul", instructions: "Is this also a test?" },
+      pick: MIXED_QUESTIONS.pick,
+      rate: MIXED_QUESTIONS.rate,
+    };
     expect(request.body).toEqual({
       // Canonicalized (sorted keys) before egress.
       state: '{"a":1,"b":2}',
-      questions: {
-        // `boolean` is the canonical name; SystemOne only speaks `noul`.
-        yes_no: { type: "noul", instructions: "Is this a test?" },
-        legacy_yes_no: { type: "noul", instructions: "Is this also a test?" },
-        pick: MIXED_QUESTIONS.pick,
-        rate: MIXED_QUESTIONS.rate,
-      },
+      questions: Object.fromEntries(Object.keys(questions).map((name) => [name, wireQuestions[name]])),
       model: contract.expectedModel,
     });
     expect(provider.model).toBe(contract.expectedModel);
@@ -146,7 +223,14 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
     expect(outcome.result.answers.yes_no).toEqual({ type: "noul", noul: 0.8 });
   });
 
-  it("lists models from the configured models path", async () => {
+  it.runIf(contract.expectedModelsPath === null)("reports no models and skips the health ping when no models endpoint is documented", async () => {
+    const provider = providerFor(contract, server.secureBaseUrl);
+    await expect(provider.listModels?.()).resolves.toEqual([]);
+    await expect(provider.availability()).resolves.toEqual({ ok: true, reason: "not-checked" });
+    expect(server.requests).toHaveLength(0);
+  });
+
+  it.runIf(contract.expectedModelsPath !== null)("lists models from the configured models path", async () => {
     const provider = providerFor(contract, server.secureBaseUrl);
     const models = await provider.listModels?.();
     expect(models).toEqual([{ name: "mock-model", description: "synthetic", release_date: "2026-01-01" }]);
@@ -198,9 +282,16 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
         state: "s",
         questions: { q: { type: "score", criteria: tooManyLevels as [string, string, ...string[]] } },
       }),
-    ).rejects.toMatchObject({ reason: "capability-max-score-levels" });
+    ).rejects.toMatchObject({
+      reason: provider.capabilities.questionTypes.includes("score") ? "capability-max-score-levels" : "capability-question-type",
+    });
     await expect(
-      pipeline.ask({ policy: "contract", companyId: "c1", state: "x".repeat(provider.capabilities.maxRequestBytes + 1), questions: MIXED_QUESTIONS }),
+      pipeline.ask({
+        policy: "contract",
+        companyId: "c1",
+        state: "x".repeat(provider.capabilities.maxRequestBytes + 1),
+        questions: questionsFor(provider),
+      }),
     ).resolves.toBeDefined(); // state is truncated first, so an oversized raw state never trips the byte cap
     expect(server.requests).toHaveLength(1);
   });
@@ -217,7 +308,7 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
     server.respondWith(() => ({ status, body: { error: { message: "nope" } } }));
     const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.secureBaseUrl)] });
 
-    const error = await pipeline.ask({ policy: "contract", companyId: "c1", state: "s", questions: MIXED_QUESTIONS }).catch((e) => e);
+    const error = await pipeline.ask({ policy: "contract", companyId: "c1", state: "s", questions: { q: { type: "boolean", instructions: "q?" } } }).catch((e) => e);
     expect(classifyError(error)).toBe(code);
   });
 
@@ -235,7 +326,8 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
     expect(classifyError(await ask().catch((e) => e))).toBe("validation-failed");
   });
 
-  it("derives a missing choice/score confidence with the canonical formulas and records the source", async () => {
+  const takesScore = providerFor(contract, "https://127.0.0.1").capabilities.questionTypes.includes("score");
+  it.runIf(takesScore)("derives a missing choice/score confidence with the canonical formulas and records the source", async () => {
     const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.secureBaseUrl)] });
     const native = await pipeline.ask({ policy: "contract", companyId: "c1", state: "native", questions: MIXED_QUESTIONS });
     expect(native.confidenceSource).toBe("native");
@@ -266,17 +358,18 @@ describe.each(SYSTEMONE_CASES)("provider contract: $name", (contract) => {
     server.respondWith((request) => ({ ...syntheticSystemOneReply(request), delayMs: 500 }));
     const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.secureBaseUrl, { timeoutMs: 50 })] });
 
-    const error = await pipeline.ask({ policy: "contract", companyId: "c1", state: "s", questions: MIXED_QUESTIONS }).catch((e) => e);
+    const error = await pipeline.ask({ policy: "contract", companyId: "c1", state: "s", questions: { q: { type: "boolean", instructions: "q?" } } }).catch((e) => e);
     expect(classifyError(error)).toBe("timeout");
   });
 
   it("estimates cost from the preset's rate card and records its version", async () => {
     const pipeline = new DecisionPipeline({ providers: [providerFor(contract, server.secureBaseUrl)] });
 
-    const outcome = await pipeline.ask({ policy: "contract", companyId: "c1", state: "s", questions: MIXED_QUESTIONS });
+    const outcome = await pipeline.ask({ policy: "contract", companyId: "c1", state: "s", questions: { q: { type: "boolean", instructions: "q?" } } });
 
-    // 1000 input + 10 output tokens at $0.5 / $1.5 per 1M.
-    expect(outcome.costUsd).toBeCloseTo(0.000515, 9);
+    // 1000 input + 10 output tokens: $0.5 / $1.5 per 1M for TypeSafe, input-only
+    // $0.042 per 1M for Kev, nothing for presets without a published price.
+    expect(outcome.costUsd).toBeCloseTo(contract.expectedCostUsd, 9);
     expect(outcome.rateVersion).toBe(contract.expectedRateVersion);
     expect(outcome.hostInvocationId).toBeNull();
   });

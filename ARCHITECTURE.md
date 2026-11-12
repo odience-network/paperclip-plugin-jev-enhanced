@@ -52,8 +52,18 @@ src/
                       `@typesafe-ai/sdk`: reuses its retry/timeout/typed
                       errors and rewrites path and auth header per preset.
       presets.ts       Named SystemOne presets (base URL, path, auth style,
-                      caps, verification tier, rate card, disclosure). Only
-                      `typesafe` in G1; G4 adds the rest.
+                      caps, verification tier, rate card, disclosure,
+                      docsUrl). `typesafe` is live; `perplexity`,
+                      `openrouter`, `decisions-api`, `ollama`, `laya`, `von`,
+                      `kev` are built from published docs (`verification:
+                      "fixtures"`). A preset's optional `normalizeResponse`
+                      maps a documented response variant (OpenRouter
+                      metadata and `usage.cost`, the decisions-api.dev
+                      envelope, von's `noul_raw`) onto the bare SystemOne
+                      body before validation, and may return the
+                      provider-reported cost, which the pipeline uses
+                      instead of a rate card. A `refusal` answer from any
+                      preset fails the decision.
       cloudflare.ts    Workers AI adapter for Clef / Clef Flash
                       (`/accounts/{accountId}/ai/run/@cf/cloudflare/{model}`):
                       SystemOne body, Cloudflare envelope unwrapped. 64
@@ -383,7 +393,7 @@ answer carries a confidence).
   provider configurations, asserting path, auth header, body shape, caps,
   redaction, no raw state in the ledger, error mapping, timeout, cost and
   rate version. `core` runs the same contract against a fake host SDK that
-  exposes and withholds `ctx.decisions`.
+  exposes and withholds `ctx.decisions`. Every Tier B preset is a row.
   `tests/provider-contract-tier-a.spec.ts` runs the same assertions
   against mock Workers AI and OpenAI Decisions servers, plus envelope,
   translation and refusal mapping.
@@ -393,6 +403,11 @@ answer carries a confidence).
   scrubbed (headers dropped; account id, UUIDs, request ids and any state
   echo replaced; the run aborts if a token survives). The adapter must send
   the recorded request and parse the recorded reply.
+- **L2 docs-derived fixtures** (Tier B) (`tests/provider-presets.spec.ts`,
+  `tests/fixtures/<preset>/`): hand-written from each Tier B provider's
+  published docs, marked `"source": "docs"` with the doc URL, replayed
+  through the mock server. `fetch` is stubbed so any request to a host other
+  than the loopback mock fails the suite.
 - **L3 live smoke** (`pnpm test:live`, `tests/live/`): ping, `listModels`,
   one boolean, one choice, one score and one refusal per provider whose
   `VERDICT_LIVE_<PROVIDER>_TOKEN` is set in a gitignored local `.env` (see

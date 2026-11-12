@@ -1,0 +1,72 @@
+{
+  "source": "docs",
+  "docsUrl": "https://vercel.com/i/jev-vs-perplexity",
+  "notes": "Hand-written from the published request example (same body as SystemOne) and the documented answer fields (choice, probabilities.<option>, separate confidence). Values are illustrative. Never captured from the live API.",
+  "path": "/v1/decisions",
+  "request": {
+    "model": "pplx-decider-v1-27b",
+    "state": "Subject: Can't open my invoices. Message: The invoices page shows a login error since yesterday.",
+    "questions": {
+      "queue": {
+        "type": "choice",
+        "instructions": "Which queue should handle this?",
+        "criteria": {
+          "billing": "Charges, invoices and refunds",
+          "account_access": "Login, password and permissions",
+          "review": "Anything else"
+        }
+      },
+      "urgent": {
+        "type": "noul",
+        "instructions": "Is the customer blocked from working?"
+      },
+      "severity": {
+        "type": "score",
+        "instructions": "How severe is this?",
+        "criteria": [
+          "Cosmetic",
+          "Degraded",
+          "Blocking"
+        ]
+      }
+    }
+  },
+  "response": {
+    "model": "pplx-decider-v1-27b",
+    "answers": {
+      "queue": {
+        "type": "choice",
+        "choice": "account_access",
+        "probabilities": {
+          "billing": 0.22,
+          "account_access": 0.71,
+          "review": 0.07
+        },
+        "confidence": 0.64
+      },
+      "urgent": {
+        "type": "noul",
+        "noul": 0.58
+      },
+      "severity": {
+        "type": "score",
+        "score": 1.2,
+        "legend": {
+          "0": "Cosmetic",
+          "1": "Degraded",
+          "2": "Blocking"
+        },
+        "probabilities": {
+          "0": 0.1,
+          "1": 0.6,
+          "2": 0.3
+        },
+        "confidence": 0.41
+      }
+    },
+    "usage": {
+      "input_tokens": 212,
+      "output_tokens": 0
+    }
+  }
+}

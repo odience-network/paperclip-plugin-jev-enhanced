@@ -4,6 +4,7 @@ import { formatPercent, type DashboardSummary, type ProviderHealth } from "./typ
 function healthLabel(health: ProviderHealth): string {
   if (health.status === "ok") return `ok (${health.modelCount} models)`;
   if (health.status === "unbound") return "no API key bound";
+  if (health.status === "unchecked") return "configured (provider publishes no health endpoint)";
   return `unreachable: ${health.message}`;
 }
 
@@ -37,7 +38,10 @@ export function DashboardWidget({ context }: PluginWidgetProps) {
       <div>
         Mode split — shadow: {data.modeSplit.shadow}, suggest: {data.modeSplit.suggest}, enforce: {data.modeSplit.enforce}
       </div>
-      <div>Provider health: {healthLabel(data.providerHealth)}</div>
+      <div>
+        Provider health: {healthLabel(data.providerHealth)}
+        {data.providerHealth.verification === "fixtures" ? " (not live-verified)" : ""}
+      </div>
       {data.providers.length > 0 && (
         <ul aria-label="Providers" style={{ margin: 0, paddingLeft: "1rem" }}>
           {data.providers.map((provider) => (

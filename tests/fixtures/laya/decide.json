@@ -1,0 +1,75 @@
+{
+  "source": "docs",
+  "docsUrl": "https://laya.convaiinnovations.com/",
+  "notes": "Community SystemOne server over the laya SDK. confidence = 1 - H(p)/ln(n) (normalised entropy of the answer's distribution); the contract test recomputes it. Score example follows the docs (expected level 2.87 of 3), noul is P(true).",
+  "path": "/v1/systemone",
+  "request": {
+    "model": "laya",
+    "state": "Ticket: our nightly export has failed three nights running and finance cannot close the month.",
+    "questions": {
+      "queue": {
+        "type": "choice",
+        "instructions": "Which queue?",
+        "criteria": {
+          "data": "Exports and reporting",
+          "billing": "Charges and refunds",
+          "other": null
+        }
+      },
+      "urgency": {
+        "type": "score",
+        "instructions": "How urgent is this ticket?",
+        "criteria": [
+          "low priority",
+          "medium",
+          "high priority",
+          "critical blocker"
+        ]
+      },
+      "churn_risk": {
+        "type": "noul",
+        "instructions": "Is the customer at risk of churning?"
+      }
+    }
+  },
+  "response": {
+    "model": "laya",
+    "answers": {
+      "queue": {
+        "type": "choice",
+        "choice": "data",
+        "probabilities": {
+          "data": 0.7,
+          "billing": 0.2,
+          "other": 0.1
+        },
+        "confidence": 0.2702
+      },
+      "urgency": {
+        "type": "score",
+        "score": 2.87,
+        "legend": {
+          "0": "low priority",
+          "1": "medium",
+          "2": "high priority",
+          "3": "critical blocker"
+        },
+        "probabilities": {
+          "0": 0.01,
+          "1": 0.03,
+          "2": 0.04,
+          "3": 0.92
+        },
+        "confidence": 0.7427
+      },
+      "churn_risk": {
+        "type": "noul",
+        "noul": 0.914
+      }
+    },
+    "usage": {
+      "input_tokens": 61,
+      "output_tokens": 0
+    }
+  }
+}

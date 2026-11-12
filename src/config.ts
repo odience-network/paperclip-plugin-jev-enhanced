@@ -232,7 +232,11 @@ export const verdictConfigSchema = z.object({
     }
   };
   for (const [id, providerConfig] of Object.entries(config.providers)) {
-    if ("baseUrl" in providerConfig && sendsCredential(providerConfig)) requireHttps(providerConfig.baseUrl, ["providers", id, "baseUrl"]);
+    if (providerConfig.kind === "core" || !sendsCredential(providerConfig)) continue;
+    // Self-hosted presets (ollama, von) default to an `http:` URL, which a
+    // bound credential must not ride on either.
+    const presetBaseUrl = providerConfig.kind === "systemone" ? SYSTEMONE_PRESETS[providerConfig.preset]?.baseUrl || undefined : undefined;
+    requireHttps(providerConfig.baseUrl ?? presetBaseUrl, ["providers", id, "baseUrl"]);
   }
   // The legacy top-level fields are read as a `typesafe` (bearer) provider.
   requireHttps(config.baseUrl, ["baseUrl"]);

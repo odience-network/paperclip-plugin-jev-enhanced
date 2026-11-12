@@ -250,6 +250,31 @@ describe("registry: cleartext credentials and disclosures (ODIAA-2473 F3)", () =
       "Sends redacted state text to https://llm.example.org:8443 (custom base URL; retention unknown).",
     );
   });
+
+  it.each(["ollama", "von"])("rejects a credential on the %s preset's http: default base URL", (preset) => {
+    expect(() => parseVerdictConfig({ providers: { subject: { kind: "systemone", preset, apiKeyRef: "ref" } } })).toThrow(
+      /baseUrl must be https:/,
+    );
+    expect(() => parseVerdictConfig({ providers: { subject: { kind: "systemone", preset } } })).not.toThrow();
+  });
+
+  it("applies the custom-origin disclosure to the Tier B presets", () => {
+    const config = parseVerdictConfig({
+      providers: {
+        pplx: { kind: "systemone", preset: "perplexity", apiKeyRef: "ref", baseUrl: "https://proxy.example.com/pplx" },
+        kev: { kind: "systemone", preset: "kev", apiKeyRef: "ref" },
+        laya: { kind: "systemone", preset: "laya", baseUrl: "http://laya.example.org:8000" },
+      },
+    });
+    expect(providerDisclosure(config.providers.pplx)).toBe(
+      "Sends redacted state text to https://proxy.example.com (custom base URL; retention unknown).",
+    );
+    expect(providerDisclosure(config.providers.kev)).toMatch(/^Sends redacted state text to Opper/);
+    // Laya has no canonical host, so any baseUrl is a custom origin.
+    expect(providerDisclosure(config.providers.laya)).toBe(
+      "Sends redacted state text to http://laya.example.org:8000 (custom base URL; retention unknown).",
+    );
+  });
 });
 
 describe("policyConfigFor: provider-bound thresholds and mode", () => {

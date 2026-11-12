@@ -1,0 +1,24 @@
+{
+  "source": "docs",
+  "docsUrl": "https://decisions-api.dev/",
+  "notes": "Error envelope on HTTP 200: code != 0. The message is provider text and must not be carried into the error.",
+  "path": "/v1/systemone",
+  "request": {
+    "model": "typesafe/jev-1.13",
+    "state": "Example state.",
+    "questions": {
+      "route": {
+        "type": "choice",
+        "criteria": {
+          "billing": null,
+          "other": null
+        }
+      }
+    }
+  },
+  "response": {
+    "code": 402,
+    "message": "insufficient credits for this request",
+    "data": null
+  }
+}

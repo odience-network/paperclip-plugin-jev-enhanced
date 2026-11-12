@@ -1,0 +1,72 @@
+{
+  "source": "docs",
+  "docsUrl": "https://ollama.com/library/clef",
+  "notes": "Mirrors the published refund-ticket example (answers in request order, output_tokens 0). Confidence measures how concentrated the probabilities are, not the chance the answer is right. Probabilities not shown in the docs are filled in to be consistent with the shown values.",
+  "path": "/v1/systemone",
+  "request": {
+    "model": "clef",
+    "state": "Customer writes: I was charged twice for my subscription this month and want a refund.",
+    "questions": {
+      "team": {
+        "type": "choice",
+        "instructions": "Which team handles this?",
+        "criteria": {
+          "billing": "Charges and refunds",
+          "technical": "Bugs and outages",
+          "other": null
+        }
+      },
+      "refund": {
+        "type": "noul",
+        "instructions": "Is the customer asking for a refund?"
+      },
+      "urgency": {
+        "type": "score",
+        "instructions": "How urgent is this?",
+        "criteria": [
+          "Routine",
+          "Soon",
+          "Urgent"
+        ]
+      }
+    }
+  },
+  "response": {
+    "model": "clef",
+    "answers": {
+      "team": {
+        "type": "choice",
+        "choice": "billing",
+        "probabilities": {
+          "billing": 0.9888,
+          "technical": 0.0072,
+          "other": 0.004
+        },
+        "confidence": 0.9667
+      },
+      "refund": {
+        "type": "noul",
+        "noul": 0.9916
+      },
+      "urgency": {
+        "type": "score",
+        "score": 1.5481,
+        "legend": {
+          "0": "Routine",
+          "1": "Soon",
+          "2": "Urgent"
+        },
+        "probabilities": {
+          "0": 0.05,
+          "1": 0.3519,
+          "2": 0.5981
+        },
+        "confidence": 0.2322
+      }
+    },
+    "usage": {
+      "input_tokens": 332,
+      "output_tokens": 0
+    }
+  }
+}
